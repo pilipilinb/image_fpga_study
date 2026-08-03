@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="600" font-family="Microsoft YaHei, sans-serif">
+  <rect width="880" height="600" fill="#ffffff"/>
+  <text x="20" y="22" font-size="15" font-weight="bold">bflush：帧尾补一整行（下边缘复制）—— W=4，H=4，帧最后一个像素已进完</text>
+
+  <!-- 周期标签 -->
+  <g font-size="13" font-weight="bold" text-anchor="middle">
+    <text x="212" y="46">C0</text><text x="297" y="46">C1</text><text x="382" y="46">C2</text>
+    <text x="467" y="46">C3</text><text x="552" y="46">C4</text><text x="637" y="46">C5</text>
+    <text x="722" y="46">C6</text><text x="807" y="46">C7</text>
+  </g>
+  <g stroke="#cccccc" stroke-dasharray="4,3">
+    <line x1="170" y1="52" x2="170" y2="480"/><line x1="255" y1="52" x2="255" y2="480"/>
+    <line x1="340" y1="52" x2="340" y2="480"/><line x1="425" y1="52" x2="425" y2="480"/>
+    <line x1="510" y1="52" x2="510" y2="480"/><line x1="595" y1="52" x2="595" y2="480"/>
+    <line x1="680" y1="52" x2="680" y2="480"/><line x1="765" y1="52" x2="765" y2="480"/>
+    <line x1="850" y1="52" x2="850" y2="480"/>
+  </g>
+
+  <!-- clk -->
+  <text x="160" y="76" font-size="12" text-anchor="end" font-weight="bold">clk</text>
+  <path d="M170,88 V60 H212 V88 H255 V60 H297 V88 H340 V60 H382 V88 H425 V60 H467 V88 H510 V60 H552 V88 H595 V60 H637 V88 H680 V60 H722 V88 H765 V60 H807 V88 H850" fill="none" stroke="#000" stroke-width="2"/>
+
+  <!-- rflush_fire -->
+  <text x="160" y="120" font-size="12" text-anchor="end">rflush_fire</text>
+  <path d="M170,105 H255 V135 H680 V105 H765 V135 H850" fill="none" stroke="#cc0000" stroke-width="2"/>
+  <text x="212" y="99" font-size="10" fill="#cc0000" text-anchor="middle">最后正常行的补拍</text>
+  <text x="722" y="99" font-size="10" fill="#cc0000" text-anchor="middle">flush行自己的补拍</text>
+
+  <!-- bf_active -->
+  <text x="160" y="168" font-size="12" text-anchor="end">bf_active</text>
+  <path d="M170,183 H255 V153 H595 V183 H850" fill="none" stroke="#0066cc" stroke-width="2"/>
+  <text x="425" y="168" font-size="11" fill="#0066cc" text-anchor="middle">发 4 个读地址</text>
+
+  <!-- fcol -->
+  <text x="160" y="215" font-size="12" text-anchor="end">fcol（读地址）</text>
+  <rect x="257" y="198" width="81" height="26" fill="#dae8fc" stroke="#6c8ebf"/><text x="297" y="216" font-size="12" text-anchor="middle">0</text>
+  <rect x="342" y="198" width="81" height="26" fill="#dae8fc" stroke="#6c8ebf"/><text x="382" y="216" font-size="12" text-anchor="middle">1</text>
+  <rect x="427" y="198" width="81" height="26" fill="#dae8fc" stroke="#6c8ebf"/><text x="467" y="216" font-size="12" text-anchor="middle">2</text>
+  <rect x="512" y="198" width="81" height="26" fill="#dae8fc" stroke="#6c8ebf"/><text x="552" y="216" font-size="12" text-anchor="middle">3</text>
+
+  <!-- bflush_dv -->
+  <text x="160" y="260" font-size="12" text-anchor="end">bflush_dv</text>
+  <path d="M170,275 H340 V245 H680 V275 H850" fill="none" stroke="#009900" stroke-width="2"/>
+  <text x="510" y="260" font-size="11" fill="#009900" text-anchor="middle">读数据晚 1 拍有效</text>
+
+  <!-- bcol_d -->
+  <text x="160" y="307" font-size="12" text-anchor="end">bcol_d（数据列号）</text>
+  <rect x="342" y="290" width="81" height="26" fill="#d5e8d4" stroke="#82b366"/><text x="382" y="308" font-size="12" text-anchor="middle">0</text>
+  <rect x="427" y="290" width="81" height="26" fill="#d5e8d4" stroke="#82b366"/><text x="467" y="308" font-size="12" text-anchor="middle">1</text>
+  <rect x="512" y="290" width="81" height="26" fill="#d5e8d4" stroke="#82b366"/><text x="552" y="308" font-size="12" text-anchor="middle">2</text>
+  <rect x="597" y="290" width="81" height="26" fill="#d5e8d4" stroke="#82b366"/><text x="637" y="308" font-size="12" text-anchor="middle">3</text>
+
+  <!-- 读出数据 -->
+  <text x="160" y="348" font-size="12" text-anchor="end">line1_rd / line2_rd</text>
+  <rect x="342" y="332" width="81" height="26" fill="#ffffff" stroke="#999"/><text x="382" y="350" font-size="11" text-anchor="middle">列0</text>
+  <rect x="427" y="332" width="81" height="26" fill="#ffffff" stroke="#999"/><text x="467" y="350" font-size="11" text-anchor="middle">列1</text>
+  <rect x="512" y="332" width="81" height="26" fill="#ffffff" stroke="#999"/><text x="552" y="350" font-size="11" text-anchor="middle">列2</text>
+  <rect x="597" y="332" width="81" height="26" fill="#ffffff" stroke="#999"/><text x="637" y="350" font-size="11" text-anchor="middle">列3</text>
+  <text x="160" y="366" font-size="10" text-anchor="end" fill="#888">(line1=行3, line2=行2)</text>
+
+  <!-- 完成的窗口 -->
+  <text x="160" y="398" font-size="12" text-anchor="end">本拍完成的窗口中心</text>
+  <rect x="427" y="382" width="81" height="26" fill="#fff2cc" stroke="#d6b656"/><text x="467" y="400" font-size="11" text-anchor="middle">(3,0)</text>
+  <rect x="512" y="382" width="81" height="26" fill="#fff2cc" stroke="#d6b656"/><text x="552" y="400" font-size="11" text-anchor="middle">(3,1)</text>
+  <rect x="597" y="382" width="81" height="26" fill="#fff2cc" stroke="#d6b656"/><text x="637" y="400" font-size="11" text-anchor="middle">(3,2)</text>
+  <rect x="682" y="382" width="81" height="26" fill="#f8cecc" stroke="#b85450" stroke-width="2"/><text x="722" y="400" font-size="11" text-anchor="middle" font-weight="bold">(3,3)★角</text>
+
+  <!-- rflush_pend -->
+  <text x="160" y="445" font-size="12" text-anchor="end">rflush_pend</text>
+  <path d="M170,460 H680 V430 H765 V460 H850" fill="none" stroke="#ff8800" stroke-width="2"/>
+
+  <!-- 注释 -->
+  <g font-size="12" fill="#333">
+    <text x="20" y="505">① C0：最后一个正常行的行尾补拍执行完，且它的中心行==H-2 → 说明正常数据全走完了，启动帧尾补行（bf_start）</text>
+    <text x="20" y="527">② C1~C4：fcol 扫 0..3，只发读地址、不写——line1_ram 里躺着最后一行(行3)，line2_ram 里躺着倒数第二行(行2)</text>
+    <text x="20" y="549">③ C2~C5：数据晚 1 拍到，逐列移入窗口。顶行←line2(行2)，中行、底行←同一个 line1(行3) ——「行3 用两次」= 下边缘复制</text>
+    <text x="20" y="571" fill="#cc0000" font-weight="bold">④ C5 末 bcol_d==3 又「欠一拍」→ C6 空拍执行 → 右下角窗口 (3,3) 完成。共 W+1=5 拍，全部塞在帧间空闲期里</text>
+  </g>
+</svg>

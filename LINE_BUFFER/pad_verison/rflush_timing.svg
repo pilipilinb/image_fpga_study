@@ -1,0 +1,138 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="770" height="700" font-family="Microsoft YaHei, sans-serif">
+  <rect width="770" height="700" fill="#ffffff"/>
+  <text x="20" y="22" font-size="15" font-weight="bold">rflush：行尾补一拍（右边缘复制）—— W=4，本行像素列 0..3</text>
+
+  <!-- 周期标签 -->
+  <text x="210" y="44" font-size="13" font-weight="bold" text-anchor="middle">C0</text>
+  <text x="325" y="44" font-size="13" font-weight="bold" text-anchor="middle">C1</text>
+  <text x="440" y="44" font-size="13" font-weight="bold" text-anchor="middle">C2</text>
+  <text x="555" y="44" font-size="13" font-weight="bold" text-anchor="middle">C3</text>
+  <text x="670" y="44" font-size="13" font-weight="bold" text-anchor="middle">C4</text>
+  <!-- 周期分界虚线 -->
+  <g stroke="#cccccc" stroke-dasharray="4,3">
+    <line x1="160" y1="50" x2="160" y2="330"/>
+    <line x1="275" y1="50" x2="275" y2="330"/>
+    <line x1="390" y1="50" x2="390" y2="330"/>
+    <line x1="505" y1="50" x2="505" y2="330"/>
+    <line x1="620" y1="50" x2="620" y2="330"/>
+    <line x1="735" y1="50" x2="735" y2="330"/>
+  </g>
+
+  <!-- clk -->
+  <text x="150" y="72" font-size="12" text-anchor="end" font-weight="bold">clk</text>
+  <path d="M160,83 V55 H217 V83 H275 V55 H332 V83 H390 V55 H447 V83 H505 V55 H562 V83 H620 V55 H677 V83 H735" fill="none" stroke="#000" stroke-width="2"/>
+
+  <!-- valid_d2 -->
+  <text x="150" y="115" font-size="12" text-anchor="end">valid_d2</text>
+  <path d="M160,100 H390 V130 H620 V100 H735" fill="none" stroke="#009900" stroke-width="2"/>
+  <text x="440" y="122" font-size="11" fill="#009900">h-blank 空拍</text>
+
+  <!-- col_d2 -->
+  <text x="150" y="165" font-size="12" text-anchor="end">col_d2</text>
+  <rect x="162" y="148" width="111" height="26" fill="#ffffff" stroke="#999"/>
+  <text x="217" y="166" font-size="12" text-anchor="middle">2</text>
+  <rect x="277" y="148" width="111" height="26" fill="#fff2cc" stroke="#d6b656"/>
+  <text x="332" y="166" font-size="12" text-anchor="middle" font-weight="bold">3 = W-1 行末</text>
+  <rect x="622" y="148" width="111" height="26" fill="#ffffff" stroke="#999"/>
+  <text x="677" y="166" font-size="12" text-anchor="middle">0（下一行）</text>
+
+  <!-- rflush_pend -->
+  <text x="150" y="205" font-size="12" text-anchor="end">rflush_pend</text>
+  <path d="M160,218 H390 V190 H505 V218 H735" fill="none" stroke="#ff8800" stroke-width="2"/>
+  <text x="447" y="205" font-size="11" fill="#ff8800" text-anchor="middle">欠一拍</text>
+
+  <!-- rflush_fire -->
+  <text x="150" y="253" font-size="12" text-anchor="end">rflush_fire</text>
+  <path d="M160,266 H390 V238 H505 V266 H735" fill="none" stroke="#cc0000" stroke-width="2"/>
+  <text x="447" y="253" font-size="11" fill="#cc0000" text-anchor="middle">还这一拍</text>
+
+  <!-- 窗口右三列内容 -->
+  <text x="150" y="300" font-size="12" text-anchor="end">窗口最右三列</text>
+  <rect x="162" y="284" width="111" height="26" fill="#f5f5f5" stroke="#999"/>
+  <text x="217" y="302" font-size="12" text-anchor="middle" fill="#888">…,0,1</text>
+  <rect x="277" y="284" width="111" height="26" fill="#ffffff" stroke="#999"/>
+  <text x="332" y="302" font-size="12" text-anchor="middle">0,1,2</text>
+  <rect x="392" y="284" width="111" height="26" fill="#ffffff" stroke="#999"/>
+  <text x="447" y="302" font-size="12" text-anchor="middle">1,2,3</text>
+  <rect x="507" y="284" width="111" height="26" fill="#f8cecc" stroke="#b85450" stroke-width="2"/>
+  <text x="562" y="302" font-size="12" text-anchor="middle" font-weight="bold">2,3,3 ★</text>
+  <rect x="622" y="284" width="111" height="26" fill="#f5f5f5" stroke="#999"/>
+  <text x="677" y="302" font-size="12" text-anchor="middle" fill="#888">2,3,3</text>
+
+  <!-- ========== 逐拍数窗口表格 ========== -->
+  <text x="20" y="360" font-size="14" font-weight="bold">为什么欠一拍？逐拍数窗口（padding 后每行要出 4 个窗口：中心 = 列0/1/2/3）</text>
+
+  <!-- 表头 -->
+  <g font-size="12">
+    <rect x="30" y="372" width="120" height="28" fill="#e8e8e8" stroke="#999"/>
+    <rect x="150" y="372" width="110" height="28" fill="#e8e8e8" stroke="#999"/>
+    <rect x="260" y="372" width="170" height="28" fill="#e8e8e8" stroke="#999"/>
+    <rect x="430" y="372" width="310" height="28" fill="#e8e8e8" stroke="#999"/>
+    <text x="90" y="391" text-anchor="middle" font-weight="bold">拍</text>
+    <text x="205" y="391" text-anchor="middle" font-weight="bold">移入的列</text>
+    <text x="345" y="391" text-anchor="middle" font-weight="bold">窗口右三列</text>
+    <text x="585" y="391" text-anchor="middle" font-weight="bold">这拍完成的窗口中心</text>
+
+    <!-- 行1 -->
+    <rect x="30" y="400" width="120" height="28" fill="#fff" stroke="#999"/>
+    <rect x="150" y="400" width="110" height="28" fill="#fff" stroke="#999"/>
+    <rect x="260" y="400" width="170" height="28" fill="#fff" stroke="#999"/>
+    <rect x="430" y="400" width="310" height="28" fill="#fff" stroke="#999"/>
+    <text x="90" y="419" text-anchor="middle">列0 进</text>
+    <text x="205" y="419" text-anchor="middle">0</text>
+    <text x="345" y="419" text-anchor="middle">(×, ×, 0)</text>
+    <text x="585" y="419" text-anchor="middle" fill="#888">无——窗口还没填满</text>
+
+    <!-- 行2 -->
+    <rect x="30" y="428" width="120" height="28" fill="#fff" stroke="#999"/>
+    <rect x="150" y="428" width="110" height="28" fill="#fff" stroke="#999"/>
+    <rect x="260" y="428" width="170" height="28" fill="#fff" stroke="#999"/>
+    <rect x="430" y="428" width="310" height="28" fill="#fff" stroke="#999"/>
+    <text x="90" y="447" text-anchor="middle">列1 进</text>
+    <text x="205" y="447" text-anchor="middle">1</text>
+    <text x="345" y="447" text-anchor="middle">(×, 0, 1)</text>
+    <text x="585" y="447" text-anchor="middle">中心=列0（左边缘 mux 白嫖这拍）</text>
+
+    <!-- 行3 -->
+    <rect x="30" y="456" width="120" height="28" fill="#fff" stroke="#999"/>
+    <rect x="150" y="456" width="110" height="28" fill="#fff" stroke="#999"/>
+    <rect x="260" y="456" width="170" height="28" fill="#fff" stroke="#999"/>
+    <rect x="430" y="456" width="310" height="28" fill="#fff" stroke="#999"/>
+    <text x="90" y="475" text-anchor="middle">列2 进（=C0）</text>
+    <text x="205" y="475" text-anchor="middle">2</text>
+    <text x="345" y="475" text-anchor="middle">(0, 1, 2)</text>
+    <text x="585" y="475" text-anchor="middle">中心=列1</text>
+
+    <!-- 行4 -->
+    <rect x="30" y="484" width="120" height="28" fill="#fff2cc" stroke="#d6b656"/>
+    <rect x="150" y="484" width="110" height="28" fill="#fff2cc" stroke="#d6b656"/>
+    <rect x="260" y="484" width="170" height="28" fill="#fff2cc" stroke="#d6b656"/>
+    <rect x="430" y="484" width="310" height="28" fill="#fff2cc" stroke="#d6b656"/>
+    <text x="90" y="503" text-anchor="middle">列3 进（=C1）</text>
+    <text x="205" y="503" text-anchor="middle">3</text>
+    <text x="345" y="503" text-anchor="middle">(1, 2, 3)</text>
+    <text x="585" y="503" text-anchor="middle" font-weight="bold">中心=列2 ← 数据进完，才出 3 个窗口！</text>
+
+    <!-- 行5 -->
+    <rect x="30" y="512" width="120" height="28" fill="#f8cecc" stroke="#b85450" stroke-width="2"/>
+    <rect x="150" y="512" width="110" height="28" fill="#f8cecc" stroke="#b85450" stroke-width="2"/>
+    <rect x="260" y="512" width="170" height="28" fill="#f8cecc" stroke="#b85450" stroke-width="2"/>
+    <rect x="430" y="512" width="310" height="28" fill="#f8cecc" stroke="#b85450" stroke-width="2"/>
+    <text x="90" y="531" text-anchor="middle" font-weight="bold">补拍（=C2）</text>
+    <text x="205" y="531" text-anchor="middle" font-weight="bold">3 再推一次</text>
+    <text x="345" y="531" text-anchor="middle" font-weight="bold">(2, 3, 3)</text>
+    <text x="585" y="531" text-anchor="middle" font-weight="bold" fill="#cc0000">中心=列3 ★ 欠的就是它</text>
+  </g>
+
+  <!-- 结论 -->
+  <text x="30" y="568" font-size="13" font-weight="bold" fill="#cc0000">算术题：每行要 4 个窗口，4 个输入拍里第一拍出不了窗 → 正常拍只出 3 个 → 永远欠 1 个</text>
+  <text x="30" y="588" font-size="12" fill="#333">欠的不是"没处理的数据"（数据全在寄存器里躺着），是"没生成的窗口"——移位链每移一次才出一个窗，想多出一个就得多移一次</text>
+
+  <!-- 波形对应注释 -->
+  <g font-size="12" fill="#333">
+    <text x="30" y="620">① C1：行末（col_d2==3）→ 置 rflush_pend「记账：欠一拍」，中心行号存入 crow_saved</text>
+    <text x="30" y="640">② C2：空拍（valid_d2=0）→ fire：最右列 3 原样再推入一次，窗口变 (2,3,3)，中心=列3 的窗口成型</text>
+    <text x="30" y="660" fill="#666">③ 必须赶在 C4 下一行数据进窗口之前补完——这就是「每行后至少空 1 拍」的由来；</text>
+    <text x="30" y="678" fill="#666">    空拍来源：真实视频的行消隐（h-blank），或 AXI-Stream 握手反压（tready 摁住上游一拍）</text>
+  </g>
+</svg>
