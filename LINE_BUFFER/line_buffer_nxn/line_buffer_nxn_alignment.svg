@@ -1,0 +1,169 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="800" font-family="Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 z" fill="#666666"/>
+    </marker>
+  </defs>
+  <rect width="1060" height="800" fill="#ffffff"/>
+
+  <!-- 标题 -->
+  <text x="530" y="26" font-size="18" font-weight="bold" text-anchor="middle">line_buffer_nxn 对齐时序图（N=4）</text>
+  <text x="530" y="48" font-size="13" fill="#555" text-anchor="middle">同一像素 P(r,c)：四行的数据"出生"时刻不同，都在 T+3 拍汇合成窗口的一列</text>
+
+  <!-- T+3 高亮列 -->
+  <rect x="630" y="78" width="150" height="392" fill="#fff8dc" stroke="none"/>
+
+  <!-- 周期标尺与网格线 -->
+  <g font-size="14" font-weight="bold" text-anchor="middle" fill="#333">
+    <text x="255" y="70">T</text>
+    <text x="405" y="70">T+1</text>
+    <text x="555" y="70">T+2</text>
+    <text x="705" y="70" fill="#c00000">T+3</text>
+  </g>
+  <g stroke="#dddddd" stroke-dasharray="4,3">
+    <line x1="180" y1="78" x2="180" y2="470"/>
+    <line x1="330" y1="78" x2="330" y2="470"/>
+    <line x1="480" y1="78" x2="480" y2="470"/>
+    <line x1="630" y1="78" x2="630" y2="470"/>
+    <line x1="780" y1="78" x2="780" y2="470"/>
+  </g>
+  <text x="705" y="66" font-size="12" fill="#c00000" text-anchor="middle" font-weight="bold">窗口采样拍</text>
+
+  <!-- ====== clk ====== -->
+  <text x="165" y="112" font-size="13" text-anchor="end" font-weight="bold">clk</text>
+  <path d="M180,125 V95 H255 V125 H330 V95 H405 V125 H480 V95 H555 V125 H630 V95 H705 V125 H780" fill="none" stroke="#000" stroke-width="2"/>
+
+  <!-- ====== din ====== -->
+  <text x="165" y="166" font-size="12" text-anchor="end">din</text>
+  <rect x="180" y="146" width="150" height="40" rx="4" fill="#f8cecc" stroke="#b85450"/>
+  <text x="255" y="164" font-size="11" text-anchor="middle">pix_d[0]=din</text>
+  <text x="255" y="180" font-size="12" font-weight="bold" text-anchor="middle">P(r,c)</text>
+  <text x="405" y="172" font-size="11" fill="#999" text-anchor="middle">已进入流水线…</text>
+  <text x="555" y="172" font-size="11" fill="#999" text-anchor="middle">…</text>
+  <text x="705" y="172" font-size="11" fill="#999" text-anchor="middle">…</text>
+
+  <!-- ====== 行3 底：pix_d 链 ====== -->
+  <text x="165" y="231" font-size="12" text-anchor="end" font-weight="bold" fill="#b85450">行3 底</text>
+  <text x="165" y="246" font-size="11" text-anchor="end" fill="#b85450">P(r,c)</text>
+  <rect x="180" y="205" width="150" height="50" rx="4" fill="#f8cecc" stroke="#b85450" fill-opacity="0.35"/>
+  <text x="255" y="226" font-size="10" text-anchor="middle" fill="#b85450">★出生</text>
+  <text x="255" y="243" font-size="11" text-anchor="middle" fill="#b85450">pix_d[0]</text>
+  <rect x="330" y="205" width="150" height="50" rx="4" fill="#f8cecc" stroke="#b85450"/>
+  <text x="405" y="226" font-size="10" text-anchor="middle">pix_d[1]</text>
+  <text x="405" y="243" font-size="11" font-weight="bold" text-anchor="middle">P(r,c)</text>
+  <rect x="480" y="205" width="150" height="50" rx="4" fill="#f8cecc" stroke="#b85450"/>
+  <text x="555" y="226" font-size="10" text-anchor="middle">pix_d[2]</text>
+  <text x="555" y="243" font-size="11" font-weight="bold" text-anchor="middle">P(r,c)</text>
+  <rect x="630" y="205" width="150" height="50" rx="4" fill="#f8cecc" stroke="#b85450" stroke-width="2.5"/>
+  <text x="705" y="226" font-size="10" text-anchor="middle">pix_d[3]</text>
+  <text x="705" y="243" font-size="11" font-weight="bold" text-anchor="middle">P(r,c)</text>
+
+  <!-- ====== 行2：stream[1] → adly ====== -->
+  <text x="165" y="301" font-size="12" text-anchor="end" font-weight="bold" fill="#d79b00">行2</text>
+  <text x="165" y="316" font-size="11" text-anchor="end" fill="#d79b00">P(r-1,c)</text>
+  <rect x="180" y="275" width="150" height="50" rx="4" fill="#f5f5f5" stroke="#cccccc" stroke-dasharray="4,3"/>
+  <text x="255" y="306" font-size="10" fill="#999" text-anchor="middle">BRAM1 潜伏</text>
+  <rect x="330" y="275" width="150" height="50" rx="4" fill="#ffe6cc" stroke="#d79b00"/>
+  <text x="405" y="296" font-size="10" text-anchor="middle" fill="#a56a00">★出生</text>
+  <text x="405" y="313" font-size="10" text-anchor="middle">stream[1]</text>
+  <rect x="480" y="275" width="150" height="50" rx="4" fill="#ffe6cc" stroke="#d79b00"/>
+  <text x="555" y="296" font-size="10" text-anchor="middle">adly[1][1]</text>
+  <text x="555" y="313" font-size="11" font-weight="bold" text-anchor="middle">P(r-1,c)</text>
+  <rect x="630" y="275" width="150" height="50" rx="4" fill="#ffe6cc" stroke="#d79b00" stroke-width="2.5"/>
+  <text x="705" y="296" font-size="10" text-anchor="middle">adly[1][2]</text>
+  <text x="705" y="313" font-size="11" font-weight="bold" text-anchor="middle">P(r-1,c)</text>
+
+  <!-- ====== 行1：stream[2] → adly ====== -->
+  <text x="165" y="371" font-size="12" text-anchor="end" font-weight="bold" fill="#82b366">行1</text>
+  <text x="165" y="386" font-size="11" text-anchor="end" fill="#82b366">P(r-2,c)</text>
+  <rect x="180" y="345" width="150" height="50" rx="4" fill="#f5f5f5" stroke="#cccccc" stroke-dasharray="4,3"/>
+  <text x="255" y="376" font-size="10" fill="#999" text-anchor="middle">—</text>
+  <rect x="330" y="345" width="150" height="50" rx="4" fill="#f5f5f5" stroke="#cccccc" stroke-dasharray="4,3"/>
+  <text x="405" y="376" font-size="10" fill="#999" text-anchor="middle">BRAM2 潜伏</text>
+  <rect x="480" y="345" width="150" height="50" rx="4" fill="#d5e8d4" stroke="#82b366"/>
+  <text x="555" y="366" font-size="10" text-anchor="middle" fill="#3e6b21">★出生</text>
+  <text x="555" y="383" font-size="10" text-anchor="middle">stream[2]</text>
+  <rect x="630" y="345" width="150" height="50" rx="4" fill="#d5e8d4" stroke="#82b366" stroke-width="2.5"/>
+  <text x="705" y="366" font-size="10" text-anchor="middle">adly[2][1]</text>
+  <text x="705" y="383" font-size="11" font-weight="bold" text-anchor="middle">P(r-2,c)</text>
+
+  <!-- ====== 行0 顶：stream[3] ====== -->
+  <text x="165" y="441" font-size="12" text-anchor="end" font-weight="bold" fill="#6c8ebf">行0 顶</text>
+  <text x="165" y="456" font-size="11" text-anchor="end" fill="#6c8ebf">P(r-3,c)</text>
+  <rect x="180" y="415" width="150" height="50" rx="4" fill="#f5f5f5" stroke="#cccccc" stroke-dasharray="4,3"/>
+  <text x="255" y="446" font-size="10" fill="#999" text-anchor="middle">—</text>
+  <rect x="330" y="415" width="150" height="50" rx="4" fill="#f5f5f5" stroke="#cccccc" stroke-dasharray="4,3"/>
+  <text x="405" y="446" font-size="10" fill="#999" text-anchor="middle">—</text>
+  <rect x="480" y="415" width="150" height="50" rx="4" fill="#f5f5f5" stroke="#cccccc" stroke-dasharray="4,3"/>
+  <text x="555" y="446" font-size="10" fill="#999" text-anchor="middle">BRAM3 潜伏</text>
+  <rect x="630" y="415" width="150" height="50" rx="4" fill="#dae8fc" stroke="#6c8ebf" stroke-width="2.5"/>
+  <text x="705" y="436" font-size="10" text-anchor="middle" fill="#2f5496">★出生=对齐</text>
+  <text x="705" y="453" font-size="10" text-anchor="middle">stream[3]</text>
+
+  <!-- 箭头与等待拍数 -->
+  <line x1="782" y1="230" x2="806" y2="230" stroke="#666" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="794" y="221" font-size="10" fill="#666" text-anchor="middle">等3拍</text>
+  <line x1="782" y1="300" x2="806" y2="300" stroke="#666" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="794" y="291" font-size="10" fill="#666" text-anchor="middle">等2拍</text>
+  <line x1="782" y1="370" x2="806" y2="370" stroke="#666" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="794" y="361" font-size="10" fill="#666" text-anchor="middle">等1拍</text>
+  <line x1="782" y1="440" x2="806" y2="440" stroke="#666" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="794" y="431" font-size="10" fill="#666" text-anchor="middle">0拍</text>
+
+  <!-- 窗口列 -->
+  <text x="920" y="192" font-size="13" font-weight="bold" text-anchor="middle">窗口列 win_col（T+3 拍就绪）</text>
+  <rect x="810" y="205" width="220" height="50" rx="4" fill="#dae8fc" stroke="#6c8ebf"/>
+  <text x="920" y="226" font-size="10" text-anchor="middle">win_col[0]=stream[3]</text>
+  <text x="920" y="243" font-size="11" font-weight="bold" text-anchor="middle">P(r-3,c) 顶</text>
+  <rect x="810" y="275" width="220" height="50" rx="4" fill="#d5e8d4" stroke="#82b366"/>
+  <text x="920" y="296" font-size="10" text-anchor="middle">win_col[1]=adly[2][1]</text>
+  <text x="920" y="313" font-size="11" font-weight="bold" text-anchor="middle">P(r-2,c)</text>
+  <rect x="810" y="345" width="220" height="50" rx="4" fill="#ffe6cc" stroke="#d79b00"/>
+  <text x="920" y="366" font-size="10" text-anchor="middle">win_col[2]=adly[1][2]</text>
+  <text x="920" y="383" font-size="11" font-weight="bold" text-anchor="middle">P(r-1,c)</text>
+  <rect x="810" y="415" width="220" height="50" rx="4" fill="#f8cecc" stroke="#b85450"/>
+  <text x="920" y="436" font-size="10" text-anchor="middle">win_col[3]=pix_d[3]</text>
+  <text x="920" y="453" font-size="11" font-weight="bold" text-anchor="middle">P(r,c) 底</text>
+  <text x="920" y="480" font-size="11" fill="#555" text-anchor="middle">→ 送入 N×N 移位窗右缘（列 j=N-1）</text>
+
+  <!-- 简化规律说明 -->
+  <rect x="40" y="502" width="980" height="92" rx="8" fill="#eef4fb" stroke="#6c8ebf"/>
+  <text x="60" y="526" font-size="14" font-weight="bold" fill="#2f5496">三句话读懂（对照上图）</text>
+  <text x="60" y="550" font-size="13" fill="#333">① 每行数据的"★出生"时刻由它在第几块 BRAM 决定：行3 在 T 出生，行2 在 T+1，行1 在 T+2，行0 在 T+3。</text>
+  <text x="60" y="572" font-size="13" fill="#333">② 窗口只在 T+3 这一拍采样（黄色列），所以出生早的行要用 adly/pix_d 一级级"等待"到 T+3 —— 图上就是彩色块向右挪。</text>
+  <text x="60" y="594" font-size="13" fill="#c00000" font-weight="bold">③ 等待拍数 = 3 − 出生偏移：出生越早等越久（行3 等 3 拍），出生最晚的顶行不用等（0 拍）。</text>
+
+  <!-- 汇总表 -->
+  <text x="40" y="626" font-size="14" font-weight="bold" fill="#333">一张表看懂（N=4 → 公式：等待拍数 = (N-1) − 出生偏移）</text>
+  <g font-size="12" text-anchor="middle">
+    <rect x="40"  y="636" width="160" height="28" fill="#e8e8e8" stroke="#999"/><text x="120" y="655" font-weight="bold">窗口行</text>
+    <rect x="200" y="636" width="130" height="28" fill="#e8e8e8" stroke="#999"/><text x="265" y="655" font-weight="bold">出生拍</text>
+    <rect x="330" y="636" width="160" height="28" fill="#e8e8e8" stroke="#999"/><text x="410" y="655" font-weight="bold">出生寄存器</text>
+    <rect x="490" y="636" width="150" height="28" fill="#e8e8e8" stroke="#999"/><text x="565" y="655" font-weight="bold">等待拍数</text>
+    <rect x="640" y="636" width="380" height="28" fill="#e8e8e8" stroke="#999"/><text x="830" y="655" font-weight="bold">对齐后喂给窗口的寄存器</text>
+
+    <rect x="40"  y="664" width="160" height="28" fill="#f8cecc" stroke="#b85450"/><text x="120" y="683">行3 底（当前）</text>
+    <rect x="200" y="664" width="130" height="28" fill="#fff" stroke="#999"/><text x="265" y="683">T</text>
+    <rect x="330" y="664" width="160" height="28" fill="#fff" stroke="#999"/><text x="410" y="683">din</text>
+    <rect x="490" y="664" width="150" height="28" fill="#fff" stroke="#999"/><text x="565" y="683">3 拍</text>
+    <rect x="640" y="664" width="380" height="28" fill="#fff" stroke="#999"/><text x="830" y="683">pix_d[3]</text>
+
+    <rect x="40"  y="692" width="160" height="28" fill="#ffe6cc" stroke="#d79b00"/><text x="120" y="711">行2</text>
+    <rect x="200" y="692" width="130" height="28" fill="#fff" stroke="#999"/><text x="265" y="711">T+1</text>
+    <rect x="330" y="692" width="160" height="28" fill="#fff" stroke="#999"/><text x="410" y="711">stream[1]（BRAM1）</text>
+    <rect x="490" y="692" width="150" height="28" fill="#fff" stroke="#999"/><text x="565" y="711">2 拍</text>
+    <rect x="640" y="692" width="380" height="28" fill="#fff" stroke="#999"/><text x="830" y="711">adly[1][2]</text>
+
+    <rect x="40"  y="720" width="160" height="28" fill="#d5e8d4" stroke="#82b366"/><text x="120" y="739">行1</text>
+    <rect x="200" y="720" width="130" height="28" fill="#fff" stroke="#999"/><text x="265" y="739">T+2</text>
+    <rect x="330" y="720" width="160" height="28" fill="#fff" stroke="#999"/><text x="410" y="739">stream[2]（BRAM2）</text>
+    <rect x="490" y="720" width="150" height="28" fill="#fff" stroke="#999"/><text x="565" y="739">1 拍</text>
+    <rect x="640" y="720" width="380" height="28" fill="#fff" stroke="#999"/><text x="830" y="739">adly[2][1]</text>
+
+    <rect x="40"  y="748" width="160" height="28" fill="#dae8fc" stroke="#6c8ebf"/><text x="120" y="767">行0 顶</text>
+    <rect x="200" y="748" width="130" height="28" fill="#fff" stroke="#999"/><text x="265" y="767">T+3</text>
+    <rect x="330" y="748" width="160" height="28" fill="#fff" stroke="#999"/><text x="410" y="767">stream[3]（BRAM3）</text>
+    <rect x="490" y="748" width="150" height="28" fill="#fff" stroke="#999"/><text x="565" y="767">0 拍</text>
+    <rect x="640" y="748" width="380" height="28" fill="#fff" stroke="#999"/><text x="830" y="767">stream[3] 直接用</text>
+  </g>
+</svg>
