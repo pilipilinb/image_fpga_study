@@ -99,12 +99,21 @@ module line_buffer_nxn #(
     end
     endgenerate
 
-    // ------------------------------------------------------------------------
+    /* -
     // 块3：N-1 块 BRAM 级联做行延迟
     //   BRAM 第 m 块：写 stream[m-1]、读旧值 → stream[m]（= 上 m 行），read-first。
     //   stream[m] 用扁平总线 stream_flat[(m-1)*DW +: DW] 承载。
     //   复位：阵列不可复位；读输出寄存器 rd 同步复位保推断。
-    // ------------------------------------------------------------------------
+    N以4为例子
+    stream_flat 总宽度 = (N-1)*DW = 3*DW
+
+         ┌─ DW ─┐ ┌─ DW ─┐ ┌─ DW ─┐
+         │      │ │      │ │      │
+stream_flat[0+:DW] [DW+:DW] [2*DW+:DW]
+         ↑              ↑        ↑
+       BRAM1 rd1    BRAM2 rd2  BRAM3 rd3
+       = P(r-1,c)  = P(r-2,c) = P(r-3,c)
+    */
     wire [(N-1)*DW-1:0] stream_flat;
 
     generate
@@ -119,12 +128,14 @@ module line_buffer_nxn #(
                 ram1[col_d[0]]   <= pix_d[0];         // 后写（当前行）
             end
         end
-        assign stream_flat[0 +: DW] = rd1;
+        assign stream_flat[0 +: DW] = rd1; //等价于stream_flat[DW-1 : 0] = rd1;，
+        // 存储所有BRAM块的输出结果
+        //stream_flat[(N-1)*DW +: DW]相当于 从第N块BRAM读到的值
     end
     // 第 2..N-1 块：写上一块的读出
     genvar m;
     for (m = 2; m <= N-1; m = m + 1) begin : gen_bram
-        (* ram_style = "block" *) reg [DW-1:0] ram [0:IMG_W-1];
+        (* ram_style = "block" *) reg [DW-1:0] ram [0:IMG_W-1]; //每块 BRAM 都有自己的 ram，同名不同层级
         reg [DW-1:0] rd;
         always @(posedge clk) begin
             if (!rst_n) rd <= {DW{1'b0}};
@@ -137,11 +148,13 @@ module line_buffer_nxn #(
     end
     endgenerate
 
-    // ------------------------------------------------------------------------
+    /* ------------------------------------------------------------------------
     // 块4：对齐延迟链 adly —— 把 BRAM 第 m 块读出再打 (N-1-m) 拍对齐到窗口
     //   adly[m][k] = stream[m] 打 k 拍；索引 (m-1)*(N-1)+(k-1)，k=1..(N-1-m)。
     //   打拍使能打 valid_d[m+k-1]（stream[m] 在 valid_d[m] 有效，逐级顺延）。
-    // ------------------------------------------------------------------------
+        mm = BRAM 的编号（1..N-1）
+        kk = 还需要额外打多少拍（1..N-1-mm）
+    */ 
     reg [DW-1:0] adly_flat [0:(N-1)*(N-1)-1];
     genvar mm, kk;
     generate
@@ -170,13 +183,21 @@ module line_buffer_nxn #(
         for (wi = 1; wi <= N-2; wi = wi + 1)                // 中间行 = adly[N-1-wi][wi]
             win_col[wi] = adly_flat[(N-2-wi)*(N-1) + (wi-1)];
     end
+    /*
+    假如N=3，则
+win_col[N-1] = win_col[2] = pix_d[2]                           // 当前行 P(r,c)，打 2 拍
+win_col[1]   =  = adly_flat[0]         //中间行， BRAM1 读出再打 1 拍 = P(r-1,c)
+win_col[0]   = stream_flat[(N-2)*DW +: DW]                     // N-2=1
+             = stream_flat[DW +: DW]                            // BRAM2 读出，不打拍 = P(r-2,c)
+
+    */
 
     // ------------------------------------------------------------------------
     // 块6：N×N 窗口横向移位 + matrix_valid
     //   valid_d[N-1] 每来一个对齐列，窗口左移一列，新列从右侧（j=N-1）进入。
     //   门控 row>=N-1 且 col>=N-1：屏蔽帧头 (N-1) 行、行头 (N-1) 列及上电脏数据。
     // ------------------------------------------------------------------------
-    reg [DW-1:0] win_flat_reg [0:N*N-1];   // win_flat_reg[行*N+列]
+    reg [DW-1:0] win_flat_reg [0:N*N-1];   // win_flat_reg[行*N+列] 是一个 N×N 的寄存器阵列，每个时钟周期整体左移一列，新列从右侧挤入。
     genvar i, j;
     generate
     for (i = 0; i <= N-1; i = i + 1) begin : gen_wrow
@@ -186,7 +207,7 @@ module line_buffer_nxn #(
                     win_flat_reg[i*N + j] <= {DW{1'b0}};
                 else if (valid_d[N-1]) begin
                     if (j == N-1) win_flat_reg[i*N + j] <= win_col[i];        // 新列进右缘
-                    else          win_flat_reg[i*N + j] <= win_flat_reg[i*N + j + 1]; // 左移
+                    else          win_flat_reg[i*N + j] <= win_flat_reg[i*N + j + 1]; // 左移，
                 end
             end
         end

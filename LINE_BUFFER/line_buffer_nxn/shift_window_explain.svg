@@ -1,0 +1,124 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="940" height="720" font-family="Microsoft YaHei, sans-serif">
+  <rect width="940" height="720" fill="#ffffff"/>
+
+  <text x="470" y="28" font-size="18" font-weight="bold" text-anchor="middle">N×N 窗口横向移位机制（以 N=3 为例）</text>
+
+  <!-- ====== 上半部分：3×3 寄存器阵列 + 移位方向 ====== -->
+  <text x="470" y="60" font-size="14" font-weight="bold" text-anchor="middle" fill="#333">块6：每来一个 valid_d[N-1]，窗口左移一列，新列从右缘进入</text>
+
+  <!-- 3×3 网格 -->
+  <g transform="translate(80, 80)">
+    <!-- 列标签 -->
+    <text x="120" y="-8" font-size="12" text-anchor="middle" font-weight="bold" fill="#666">列0 (j=0)</text>
+    <text x="265" y="-8" font-size="12" text-anchor="middle" font-weight="bold" fill="#666">列1 (j=1)</text>
+    <text x="410" y="-8" font-size="12" text-anchor="middle" font-weight="bold" fill="#666">列2 (j=2)</text>
+
+    <!-- 行标签 -->
+    <text x="-10" y="40" font-size="12" text-anchor="end" font-weight="bold" fill="#666">行0 (i=0)</text>
+    <text x="-10" y="105" font-size="12" text-anchor="end" font-weight="bold" fill="#666">行1 (i=1)</text>
+    <text x="-10" y="170" font-size="12" text-anchor="end" font-weight="bold" fill="#666">行2 (i=2)</text>
+
+    <!-- 画 9 个格子 -->
+    <g fill="#e8f4fd" stroke="#4a8dcf" stroke-width="1.5">
+      <rect x="10" y="10" width="105" height="50" rx="4"/>
+      <rect x="155" y="10" width="105" height="50" rx="4"/>
+      <rect x="300" y="10" width="105" height="50" rx="4" fill="#fff8dc" stroke="#d4a017"/>
+      <rect x="10" y="75" width="105" height="50" rx="4"/>
+      <rect x="155" y="75" width="105" height="50" rx="4"/>
+      <rect x="300" y="75" width="105" height="50" rx="4" fill="#fff8dc" stroke="#d4a017"/>
+      <rect x="10" y="140" width="105" height="50" rx="4"/>
+      <rect x="155" y="140" width="105" height="50" rx="4"/>
+      <rect x="300" y="140" width="105" height="50" rx="4" fill="#fff8dc" stroke="#d4a017"/>
+    </g>
+
+    <!-- 格子内文字 -->
+    <g font-size="11" text-anchor="middle" fill="#333">
+      <text x="62" y="35">[0]</text><text x="62" y="48" font-size="9" fill="#888">P(r-2,c-2)</text>
+      <text x="207" y="35">[1]</text><text x="207" y="48" font-size="9" fill="#888">P(r-2,c-1)</text>
+      <text x="352" y="35" fill="#b8860b">[2]</text><text x="352" y="48" font-size="9" fill="#b8860b">新列</text>
+
+      <text x="62" y="100">[3]</text><text x="62" y="113" font-size="9" fill="#888">P(r-1,c-2)</text>
+      <text x="207" y="100">[4]</text><text x="207" y="113" font-size="9" fill="#888">P(r-1,c-1)</text>
+      <text x="352" y="100" fill="#b8860b">[5]</text><text x="352" y="113" font-size="9" fill="#b8860b">新列</text>
+
+      <text x="62" y="165">[6]</text><text x="62" y="178" font-size="9" fill="#888">P(r,c-2)</text>
+      <text x="207" y="165">[7]</text><text x="207" y="178" font-size="9" fill="#888">P(r,c-1)</text>
+      <text x="352" y="165" fill="#b8860b">[8]</text><text x="352" y="178" font-size="9" fill="#b8860b">新列</text>
+    </g>
+
+    <!-- 左移箭头（列0→列1, 列1→列2） -->
+    <defs>
+      <marker id="arrowGray" markerWidth="8" markerHeight="8" refX="5" refY="4" orient="auto">
+        <path d="M0,0 L8,4 L0,8 z" fill="#888"/>
+      </marker>
+      <marker id="arrowGreen" markerWidth="8" markerHeight="8" refX="5" refY="4" orient="auto">
+        <path d="M0,0 L8,4 L0,8 z" fill="#2e7d32"/>
+      </marker>
+    </defs>
+
+    <!-- 列0→列1 左移箭头，三行 -->
+    <line x1="118" y1="35" x2="148" y2="35" stroke="#888" stroke-width="2" marker-end="url(#arrowGray)"/>
+    <line x1="118" y1="100" x2="148" y2="100" stroke="#888" stroke-width="2" marker-end="url(#arrowGray)"/>
+    <line x1="118" y1="165" x2="148" y2="165" stroke="#888" stroke-width="2" marker-end="url(#arrowGray)"/>
+
+    <!-- 列1→列2 左移箭头，三行 -->
+    <line x1="263" y1="35" x2="293" y2="35" stroke="#888" stroke-width="2" marker-end="url(#arrowGray)"/>
+    <line x1="263" y1="100" x2="293" y2="100" stroke="#888" stroke-width="2" marker-end="url(#arrowGray)"/>
+    <line x1="263" y1="165" x2="293" y2="165" stroke="#888" stroke-width="2" marker-end="url(#arrowGray)"/>
+
+    <!-- 新列进入箭头（从右侧进入列2） -->
+    <line x1="438" y1="35" x2="413" y2="35" stroke="#2e7d32" stroke-width="2" marker-end="url(#arrowGreen)"/>
+    <line x1="438" y1="100" x2="413" y2="100" stroke="#2e7d32" stroke-width="2" marker-end="url(#arrowGreen)"/>
+    <line x1="438" y1="165" x2="413" y2="165" stroke="#2e7d32" stroke-width="2" marker-end="url(#arrowGreen)"/>
+  </g>
+
+  <!-- 新列来源标注 -->
+  <g transform="translate(560, 85)">
+    <text x="0" y="0" font-size="12" font-weight="bold" fill="#2e7d32">新列来源（块5）</text>
+    <rect x="0" y="10" width="180" height="30" rx="4" fill="#e8f5e9" stroke="#2e7d32"/>
+    <text x="10" y="30" font-size="11" fill="#2e7d32">win_col[i]  ← 块5 组装对齐</text>
+    <text x="0" y="60" font-size="11" fill="#333">当 j == N-1（最右列）：</text>
+    <text x="0" y="78" font-size="11" fill="#555">win_flat_reg[i*N+j] &lt;= win_col[i]</text>
+    <text x="0" y="106" font-size="11" fill="#333">当 j &lt; N-1（左移）：</text>
+    <text x="0" y="124" font-size="11" fill="#555">win_flat_reg[i*N+j] &lt;= win_flat_reg[i*N+j+1]</text>
+  </g>
+
+  <!-- ====== 下半部分：代码逻辑对应表 ====== -->
+  <g transform="translate(40, 300)">
+    <text x="0" y="0" font-size="14" font-weight="bold" fill="#333">双重循环展开后（N=3），j 从 0 到 2 的赋值逻辑：</text>
+
+    <!-- 行0 i=0 -->
+    <rect x="0" y="15" width="860" height="55" rx="6" fill="#f5f5f5" stroke="#ccc"/>
+    <text x="15" y="38" font-size="13" font-weight="bold" fill="#4a8dcf">行0 (i=0)</text>
+    <text x="15" y="58" font-size="12" fill="#333">j=0: win_flat_reg[0] &lt;= win_flat_reg[1]  ← 列0接列1</text>
+    <text x="440" y="58" font-size="12" fill="#333">j=1: win_flat_reg[1] &lt;= win_flat_reg[2]  ← 列1接列2</text>
+    <text x="15" y="38" id="row0_j2" font-size="12" fill="#2e7d32" font-weight="bold" transform="translate(440,20)">j=2: win_flat_reg[2] &lt;= win_col[0]  ← 新列</text>
+
+    <!-- 行1 i=1 -->
+    <rect x="0" y="80" width="860" height="55" rx="6" fill="#f5f5f5" stroke="#ccc"/>
+    <text x="15" y="103" font-size="13" font-weight="bold" fill="#4a8dcf">行1 (i=1)</text>
+    <text x="15" y="123" font-size="12" fill="#333">j=0: win_flat_reg[3] &lt;= win_flat_reg[4]  ← 列0接列1</text>
+    <text x="440" y="123" font-size="12" fill="#333">j=1: win_flat_reg[4] &lt;= win_flat_reg[5]  ← 列1接列2</text>
+    <text x="15" y="103" id="row1_j2" font-size="12" fill="#2e7d32" font-weight="bold" transform="translate(440,20)">j=2: win_flat_reg[5] &lt;= win_col[1]  ← 新列</text>
+
+    <!-- 行2 i=2 -->
+    <rect x="0" y="145" width="860" height="55" rx="6" fill="#f5f5f5" stroke="#ccc"/>
+    <text x="15" y="168" font-size="13" font-weight="bold" fill="#4a8dcf">行2 (i=2)</text>
+    <text x="15" y="188" font-size="12" fill="#333">j=0: win_flat_reg[6] &lt;= win_flat_reg[7]  ← 列0接列1</text>
+    <text x="440" y="188" font-size="12" fill="#333">j=1: win_flat_reg[7] &lt;= win_flat_reg[8]  ← 列1接列2</text>
+    <text x="15" y="168" id="row2_j2" font-size="12" fill="#2e7d32" font-weight="bold" transform="translate(440,20)">j=2: win_flat_reg[8] &lt;= win_col[2]  ← 新列</text>
+
+    <!-- 扁平输出 -->
+    <text x="0" y="230" font-size="14" font-weight="bold" fill="#333">扁平输出（gen_oi / gen_oj 循环）</text>
+    <rect x="0" y="242" width="860" height="50" rx="6" fill="#fff8e1" stroke="#d4a017"/>
+    <text x="15" y="265" font-size="12" fill="#333">assign win_flat[(i*N + j)*DW +: DW] = win_flat_reg[i*N + j];</text>
+    <text x="15" y="283" font-size="11" fill="#888">→ 将二维寄存器阵列展平为连续位宽输出，下游算法直连 win_flat 即可</text>
+  </g>
+
+  <!-- 底部总结 -->
+  <rect x="40" y="610" width="860" height="90" rx="8" fill="#eef4fb" stroke="#4a8dcf"/>
+  <text x="60" y="635" font-size="14" font-weight="bold" fill="#2f5496">一句话总结</text>
+  <text x="60" y="660" font-size="13" fill="#333">N×N 窗口 = N 行 × N 列的移位寄存器阵列。</text>
+  <text x="60" y="682" font-size="13" fill="#333">每来一个对齐像素（valid_d[N-1]），所有列左移一格，新列 win_col[i] 从右侧进入，</text>
+  <text x="60" y="704" font-size="13" fill="#c00000" font-weight="bold">经过 N 个像素积累后，窗口填满 N 列，matrix_valid 拉高输出第一个有效窗口。</text>
+</svg>
