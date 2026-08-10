@@ -160,7 +160,7 @@ vvp tb.vvp                # 期望输出: 48 窗口 0 错误
 cd CSC/3stage
 iverilog -o tb.vvp tb_rgb_to_ycbcr.v
 vvp tb.vvp > sim_log.txt  # 期望输出: 9885 拍全部 PASS
-test -f verify_csc.py && python verify_csc.py   # 独立算法二次校验
+python verify_csc.py      # 独立算法二次校验（解析 sim_log.txt 重算比对）
 
 # 3. 双线性缩放（完整验证链）
 cd ../../bilinear_v3
