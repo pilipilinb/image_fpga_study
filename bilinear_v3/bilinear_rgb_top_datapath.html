@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>bilinear_rgb_top.v 数据流图（RGB888 整数倍放大）</title>
+  <style>
+    body {
+      font-family: "Microsoft YaHei", "PingFang SC", SimHei, sans-serif;
+      margin: 0;
+      padding: 24px;
+      background: #f5f7fa;
+      color: #333;
+    }
+    .page {
+      max-width: 1320px;
+      margin: 0 auto;
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+      padding: 28px 32px 40px;
+    }
+    h1 {
+      font-size: 22px;
+      color: #1f4e79;
+      margin: 0 0 6px;
+    }
+    .subtitle {
+      font-size: 13px;
+      color: #666;
+      margin: 0 0 20px;
+    }
+    svg {
+      width: 100%;
+      height: auto;
+      max-width: 1280px;
+      display: block;
+      margin: 0 auto;
+      border: 1px solid #e3e8ef;
+      border-radius: 8px;
+      background: #fff;
+    }
+    h2 {
+      font-size: 16px;
+      color: #1f4e79;
+      border-left: 4px solid #4a82c3;
+      padding-left: 10px;
+      margin: 28px 0 12px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      border: 1px solid #dde3ea;
+      padding: 8px 12px;
+      text-align: left;
+    }
+    th {
+      background: #eef4fb;
+      color: #1f4e79;
+      font-weight: 600;
+    }
+    tr:nth-child(even) td {
+      background: #fafbfd;
+    }
+    code {
+      background: #f0f2f5;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 12px;
+      color: #c0341d;
+    }
+    ul {
+      font-size: 13px;
+      line-height: 1.9;
+      padding-left: 22px;
+    }
+    .legend-box {
+      display: inline-flex;
+      align-items: center;
+      margin-right: 28px;
+      font-size: 13px;
+    }
+    .legend-line {
+      display: inline-block;
+      width: 34px;
+      height: 0;
+      border-top: 2px solid #1a6b3c;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+    .legend-dash {
+      display: inline-block;
+      width: 34px;
+      height: 0;
+      border-top: 2px dashed #e07b00;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+    .tag {
+      display: inline-block;
+      background: #eef4fb;
+      color: #1f4e79;
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 12px;
+      margin-right: 6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+
+    <h1>bilinear_rgb_top.v 数据流图（RGB888 整数倍放大）</h1>
+    <p class="subtitle">
+      主链：<code>coord_gen</code> → 地址/权重分离 → <code>4×image_rom</code> → <code>3×bilinear_interp_8b</code> → RGB888 输出
+      ｜ 文件：<code>bilinear/bilinear_v3/bilinear_rgb_top.v</code>
+    </p>
+
+    <!-- ======================= 内嵌数据流图（SVG） ======================= -->
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 660" font-family="Microsoft YaHei, SimHei, sans-serif">
+      <defs>
+        <marker id="arrData" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#1a6b3c"/>
+        </marker>
+        <marker id="arrCtl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#e07b00"/>
+        </marker>
+      </defs>
+
+      <!-- 模块1：coord_gen -->
+      <rect x="60" y="300" width="200" height="140" rx="10" fill="#ffffff" stroke="#4a82c3" stroke-width="2"/>
+      <text x="160" y="322" text-anchor="middle" font-size="15" font-weight="bold" fill="#1f4e79">coord_gen</text>
+      <text x="160" y="340" text-anchor="middle" font-size="11" fill="#8a6d3b">T 拍：组合输出坐标/权重</text>
+      <text x="8" y="352" font-size="12" fill="#333">start</text>
+      <line x1="42" y1="346" x2="60" y2="346" stroke="#1a6b3c" stroke-width="2" marker-end="url(#arrData)"/>
+      <text x="8" y="382" font-size="12" fill="#333">pixel_en</text>
+      <line x1="42" y1="376" x2="60" y2="376" stroke="#1a6b3c" stroke-width="2" marker-end="url(#arrData)"/>
+      <text x="8" y="412" font-size="11" fill="#999">clk / rst_n</text>
+      <text x="266" y="330" text-anchor="end" font-size="12" fill="#1a6b3c">sx, sy</text>
+      <text x="266" y="360" text-anchor="end" font-size="12" fill="#1a6b3c">u_frac, v_frac</text>
+      <text x="266" y="388" text-anchor="end" font-size="12" fill="#e07b00">valid0</text>
+      <text x="266" y="420" text-anchor="end" font-size="12" fill="#e07b00">done</text>
+
+      <!-- 模块2：地址计算+钳位 -->
+      <rect x="340" y="100" width="200" height="130" rx="10" fill="#ffffff" stroke="#4a82c3" stroke-width="2"/>
+      <text x="440" y="122" text-anchor="middle" font-size="14" font-weight="bold" fill="#1f4e79">地址计算 + 钳位</text>
+      <text x="440" y="140" text-anchor="middle" font-size="11" fill="#8a6d3b">T 拍（组合逻辑）</text>
+      <text x="352" y="163" font-size="11" fill="#555">addr00 = P(sy, sx)</text>
+      <text x="352" y="180" font-size="11" fill="#555">addr10 = +1 / addr01 = +IN_W</text>
+      <text x="352" y="197" font-size="11" fill="#555">addr11 = +IN_W + 1</text>
+      <text x="352" y="218" font-size="11" fill="#8a6d3b">sx/sy 及 +1 越界钳位 → 钳位标志</text>
+
+      <!-- 模块3：对齐寄存+权重清零 -->
+      <rect x="340" y="340" width="200" height="120" rx="10" fill="#ffffff" stroke="#4a82c3" stroke-width="2"/>
+      <text x="440" y="362" text-anchor="middle" font-size="14" font-weight="bold" fill="#1f4e79">对齐寄存 + 权重清零</text>
+      <text x="440" y="380" text-anchor="middle" font-size="11" fill="#8a6d3b">T 拍沿 → T+1 拍</text>
+      <text x="352" y="405" font-size="11" fill="#555">u/v/valid0/钳位标志延迟 1 拍</text>
+      <text x="352" y="425" font-size="11" fill="#555">（对齐 ROM 读潜伏）</text>
+      <text x="352" y="445" font-size="11" fill="#8a6d3b">钳位方向权重清零 → u_core / v_core</text>
+
+      <!-- 模块4：4×image_rom -->
+      <rect x="620" y="70" width="230" height="330" rx="10" fill="#ffffff" stroke="#4a82c3" stroke-width="2"/>
+      <text x="735" y="92" text-anchor="middle" font-size="14" font-weight="bold" fill="#1f4e79">4 × image_rom</text>
+      <text x="735" y="110" text-anchor="middle" font-size="11" fill="#8a6d3b">T+1 拍输出（读潜伏 1 拍）</text>
+      <rect x="640" y="130" width="190" height="40" rx="6" fill="#eef4fb" stroke="#8ab4d8"/>
+      <text x="735" y="155" text-anchor="middle" font-size="12" fill="#1f4e79">U_ROM00  addr00 → dout00</text>
+      <rect x="640" y="180" width="190" height="40" rx="6" fill="#eef4fb" stroke="#8ab4d8"/>
+      <text x="735" y="205" text-anchor="middle" font-size="12" fill="#1f4e79">U_ROM10  addr10 → dout10</text>
+      <rect x="640" y="230" width="190" height="40" rx="6" fill="#eef4fb" stroke="#8ab4d8"/>
+      <text x="735" y="255" text-anchor="middle" font-size="12" fill="#1f4e79">U_ROM01  addr01 → dout01</text>
+      <rect x="640" y="280" width="190" height="40" rx="6" fill="#eef4fb" stroke="#8ab4d8"/>
+      <text x="735" y="305" text-anchor="middle" font-size="12" fill="#1f4e79">U_ROM11  addr11 → dout11</text>
+      <text x="735" y="352" text-anchor="middle" font-size="11" fill="#666">共享同一 INIT_FILE（$readmemh）</text>
+      <text x="735" y="370" text-anchor="middle" font-size="11" fill="#666">BRAM 阵列不可复位，读寄存器同步复位</text>
+      <text x="735" y="388" text-anchor="middle" font-size="11" fill="#666">dout 24bit：R[23:16] G[15:8] B[7:0]</text>
+
+      <!-- 模块5：3×bilinear_interp_8b -->
+      <rect x="930" y="70" width="200" height="330" rx="10" fill="#ffffff" stroke="#4a82c3" stroke-width="2"/>
+      <text x="1030" y="92" text-anchor="middle" font-size="14" font-weight="bold" fill="#1f4e79">3 × bilinear_interp_8b</text>
+      <text x="1030" y="110" text-anchor="middle" font-size="11" fill="#8a6d3b">LAT=8 流水（T+2..T+9）</text>
+      <rect x="950" y="130" width="160" height="60" rx="6" fill="#eefaf0" stroke="#7cc4a0"/>
+      <text x="1030" y="156" text-anchor="middle" font-size="12" fill="#1a6b3c">U_CORE_R</text>
+      <text x="1030" y="174" text-anchor="middle" font-size="11" fill="#555">p00/p01/p10/p11 → o_r</text>
+      <rect x="950" y="210" width="160" height="60" rx="6" fill="#eefaf0" stroke="#7cc4a0"/>
+      <text x="1030" y="236" text-anchor="middle" font-size="12" fill="#1a6b3c">U_CORE_G</text>
+      <text x="1030" y="254" text-anchor="middle" font-size="11" fill="#555">p00/p01/p10/p11 → o_g</text>
+      <rect x="950" y="290" width="160" height="60" rx="6" fill="#eefaf0" stroke="#7cc4a0"/>
+      <text x="1030" y="316" text-anchor="middle" font-size="12" fill="#1a6b3c">U_CORE_B</text>
+      <text x="1030" y="334" text-anchor="middle" font-size="11" fill="#555">p00/p01/p10/p11 → o_b</text>
+      <text x="1030" y="382" text-anchor="middle" font-size="11" fill="#666">9 位防回绕舍入 + 饱和 255</text>
+
+      <!-- 数据流箭头 -->
+      <path d="M 260 340 L 300 340 L 300 165 L 340 165" fill="none" stroke="#1a6b3c" stroke-width="2" marker-end="url(#arrData)"/>
+      <line x1="260" y1="374" x2="340" y2="374" stroke="#1a6b3c" stroke-width="3.5" marker-end="url(#arrData)"/>
+      <path d="M 540 165 L 590 165 L 590 205 L 620 205" fill="none" stroke="#1a6b3c" stroke-width="3.5" marker-end="url(#arrData)"/>
+      <text x="580" y="155" text-anchor="middle" font-size="12" fill="#1a6b3c">addr00/10/01/11</text>
+      <text x="608" y="192" text-anchor="start" font-size="10" fill="#666">→ ROM00/10/01/11</text>
+      <path d="M 850 205 L 890 205 L 890 180 L 930 180" fill="none" stroke="#1a6b3c" stroke-width="3.5" marker-end="url(#arrData)"/>
+      <text x="885" y="196" text-anchor="middle" font-size="12" fill="#1a6b3c">dout00/10/01/11</text>
+      <text x="885" y="168" text-anchor="middle" font-size="10" fill="#666">4×24bit 广播至每核</text>
+      <path d="M 540 400 L 880 400 L 880 230 L 930 230" fill="none" stroke="#1a6b3c" stroke-width="3.5" marker-end="url(#arrData)"/>
+      <text x="875" y="392" text-anchor="middle" font-size="12" fill="#1a6b3c">u_core, v_core, valid_d1</text>
+      <line x1="1130" y1="160" x2="1142" y2="165" stroke="#1a6b3c" stroke-width="2" marker-end="url(#arrData)"/>
+      <text x="1148" y="170" font-size="13" font-weight="bold" fill="#1a6b3c">o_r</text>
+      <line x1="1130" y1="240" x2="1142" y2="245" stroke="#1a6b3c" stroke-width="2" marker-end="url(#arrData)"/>
+      <text x="1148" y="250" font-size="13" font-weight="bold" fill="#1a6b3c">o_g</text>
+      <line x1="1130" y1="320" x2="1142" y2="325" stroke="#1a6b3c" stroke-width="2" marker-end="url(#arrData)"/>
+      <text x="1148" y="330" font-size="13" font-weight="bold" fill="#1a6b3c">o_b</text>
+      <path d="M 1030 400 L 1130 400 L 1138 403" fill="none" stroke="#e07b00" stroke-width="2" stroke-dasharray="5,4" marker-end="url(#arrCtl)"/>
+      <text x="1148" y="405" font-size="13" font-weight="bold" fill="#e07b00">o_valid</text>
+      <path d="M 160 440 L 160 545 L 1138 545" fill="none" stroke="#e07b00" stroke-width="2" stroke-dasharray="5,4" marker-end="url(#arrCtl)"/>
+      <text x="1148" y="549" font-size="13" font-weight="bold" fill="#e07b00">o_done</text>
+
+      <!-- 图例 -->
+      <line x1="20" y1="596" x2="60" y2="596" stroke="#1a6b3c" stroke-width="2" marker-end="url(#arrData)"/>
+      <text x="70" y="600" font-size="12" fill="#333">数据流（坐标/地址/像素）</text>
+      <line x1="250" y1="596" x2="290" y2="596" stroke="#e07b00" stroke-width="2" stroke-dasharray="5,4" marker-end="url(#arrCtl)"/>
+      <text x="300" y="600" font-size="12" fill="#333">valid/控制流（valid0, valid_d1, done）</text>
+      <text x="560" y="600" font-size="12" fill="#666">粗线 = 多信号组总线（标注分配关系）</text>
+    </svg>
+
+    <!-- ======================= 图例 ======================= -->
+    <h2>线型图例</h2>
+    <p>
+      <span class="legend-box"><span class="legend-line"></span>数据流（坐标 / 地址 / 像素）</span>
+      <span class="legend-box"><span class="legend-dash"></span>valid / 控制流</span>
+      <span class="legend-box" style="font-weight:600;">粗线 = 多信号组总线</span>
+    </p>
+
+    <!-- ======================= 模块职责表 ======================= -->
+    <h2>模块职责与接口</h2>
+    <table>
+      <tr><th>模块</th><th>职责</th><th>时序</th><th>关键输入</th><th>关键输出</th></tr>
+      <tr>
+        <td><code>coord_gen</code></td>
+        <td>定点累加生成源坐标与插值权重（加法免乘除，STEP 为编译期 localparam）</td>
+        <td>T 拍（组合）</td>
+        <td>start, pixel_en</td>
+        <td>sx/sy, u_frac/v_frac, valid0, done</td>
+      </tr>
+      <tr>
+        <td><code>地址计算 + 钳位</code></td>
+        <td>由源坐标算 4 个邻居地址；sx/sy 及 +1 越界钳位并产生钳位标志</td>
+        <td>T 拍（组合）</td>
+        <td>sx, sy</td>
+        <td>addr00/10/01/11, clamp_u/clamp_v</td>
+      </tr>
+      <tr>
+        <td><code>对齐寄存 + 权重清零</code></td>
+        <td>u/v/valid/钳位标志延迟 1 拍对齐 ROM 读潜伏；钳位方向权重清零</td>
+        <td>T 拍沿 → T+1</td>
+        <td>u_frac, v_frac, valid0, clamp 标志</td>
+        <td>u_core, v_core, valid_d1</td>
+      </tr>
+      <tr>
+        <td><code>4 × image_rom</code></td>
+        <td>推断式 BRAM 只读 ROM 存原图（$readmemh），4 份并联 1 拍读齐 4 邻域</td>
+        <td>T+1 拍输出</td>
+        <td>addr00/10/01/11</td>
+        <td>dout00/10/01/11（24bit）</td>
+      </tr>
+      <tr>
+        <td><code>3 × bilinear_interp_8b</code></td>
+        <td>R/G/B 各一核做 2×2 双线性插值；9 级流水（LAT=8）；9 位防回绕舍入 + 饱和</td>
+        <td>T+2..T+9 流水</td>
+        <td>u_core, v_core, valid_d1, dout×4</td>
+        <td>o_r/o_g/o_b, o_valid</td>
+      </tr>
+    </table>
+
+    <!-- ======================= 时序说明 ======================= -->
+    <h2>时序流水（对齐 LAT=8）</h2>
+    <ul>
+      <li><span class="tag">T 拍</span><code>coord_gen</code> 组合输出 (sx, sy, u, v, valid0)；组合计算 4 个读地址与钳位标志。</li>
+      <li><span class="tag">T 拍沿</span>地址锁入 <code>image_rom</code>（内部 1 拍潜伏）；u/v/valid0/钳位标志寄存 1 拍。</li>
+      <li><span class="tag">T+1 拍</span><code>image_rom</code> 输出 4×24bit；权重按钳位标志清零后喂核（与 ROM 输出同拍）。</li>
+      <li><span class="tag">T+2..T+9</span>插值核 8 级流水（像素旁路 3 级内置于核，与权重路径汇合同拍）。</li>
+      <li><span class="tag">T+9 拍</span><code>o_r/o_g/o_b</code> + <code>o_valid</code> 输出；<code>o_done</code> 由 coord_gen 帧末组合标志透传。</li>
+    </ul>
+
+    <!-- ======================= 关键设计点 ======================= -->
+    <h2>关键设计点</h2>
+    <ul>
+      <li><b>BRAM 铁律</b>：存储阵列物理不可复位（原语无复位 pin），读输出寄存器同步复位保推断；上电脏数据由 valid 门控屏蔽。</li>
+      <li><b>字节序</b>：dout 24bit，R=bit[23:16]、G=bit[15:8]、B=bit[7:0]，与 MATLAB COE 脚本一致。</li>
+      <li><b>钳位 + 权重清零耦合</b>：被钳位方向权重清零，插值显式退化为最近邻复制。</li>
+      <li><b>地址防截断</b>：sy 先扩展到 ADDR_W 位再乘，避免 <code>sy*IN_W</code> 乘积高位被 Verilog 截断。</li>
+      <li><b>9 位防回绕舍入</b>：255+1 不再回绕成 0，饱和到 255（修复 case1 死代码/回绕两处 bug）。</li>
+      <li><b>架构取舍</b>：整图 ROM 随机读（学习小图），行缓存复用留给 W4 卷积（已登记 AGENTS.md 修订记录）。</li>
+    </ul>
+
+  </div>
+</body>
+</html>

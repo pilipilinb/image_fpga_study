@@ -1,0 +1,13 @@
+# 仿真与中间产物（遵循 LINE_BUFFER/.gitignore 惯例）
+*.vcd
+*.vvp
+*.v.out
+*.vsdx
+xsim.dir/
+*.sdb
+*.rlx
+*.pb
+
+# 系统文件
+Thumbs.db
+Desktop.ini
