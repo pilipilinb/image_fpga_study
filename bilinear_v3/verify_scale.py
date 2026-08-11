@@ -16,8 +16,9 @@
 #
 # 用法：
 #   python verify_scale.py --in-hex input.hex --out-coe output.coe \
-#       --in-w 112 --in-h 103 --scale 2
-#   （所有打印同时写入 --log 指定的日志文件，默认 verify_scale.log）
+#       --in-w 112 --in-h 103 --scale-n 3 --scale-d 1
+#   （放大 3 倍 = --scale-n 3 --scale-d 1；缩小 2 倍 = --scale-n 1 --scale-d 2；
+#     所有打印同时写入 --log 指定的日志文件，默认 verify_scale.log）
 import argparse
 import math
 import sys
@@ -114,14 +115,16 @@ def main():
     ap.add_argument('--out-coe', default='output.coe', help='RTL 仿真输出 COE')
     ap.add_argument('--in-w', type=int, default=112, help='输入宽')
     ap.add_argument('--in-h', type=int, default=103, help='输入高')
-    ap.add_argument('--scale', type=int, default=2, help='放大整数倍')
+    ap.add_argument('--scale-n', '--scale', type=int, default=2, help='缩放倍数分子（放大 N 倍，默认 2）')
+    ap.add_argument('--scale-d', type=int, default=1, help='缩放倍数分母（缩小 N 倍 = N 分之一，默认 1）')
     ap.add_argument('--png', default='verify_scale_compare.png', help='对比图输出路径')
     ap.add_argument('--log', default='verify_scale.log', help='日志文件（默认 verify_scale.log）')
     args = ap.parse_args()
 
     tee = Tee(args.log)     # 之后所有 print 同时写入日志文件
 
-    out_w, out_h = args.in_w * args.scale, args.in_h * args.scale
+    out_w = args.in_w * args.scale_n // args.scale_d
+    out_h = args.in_h * args.scale_n // args.scale_d
     out_total = out_w * out_h
     # 与 RTL 一致的定点步进（coord_gen 的 localparam 算法，含四舍五入）
     fb = 8

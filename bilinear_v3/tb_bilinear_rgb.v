@@ -16,7 +16,8 @@
 //   - 控制信号在 negedge 置位，避开 posedge 竞争
 //   - 先设置后等待（pixel_en=1 再 @(negedge clk)），每个输入恰采样一次
 //   - 停止后检查 o_valid 必须为 0（排空，防残留）
-// 配置：iverilog 加 -DSMALL 跑合成小图（Step 8），默认跑真图 input.hex
+// 配置：iverilog 加 -DSMALL 跑合成小图（Step 8），默认跑真图 input.hex；
+//   缩放倍数：默认放大 2 倍，-DSCALE3 放大 3 倍，-DDOWN2 缩小 2 倍，-DDOWN3 缩小 3 倍
 //   iverilog -DSMALL -I <v3目录> -o tb.vvp tb_bilinear_rgb.v
 //   iverilog        -I <v3目录> -o tb.vvp tb_bilinear_rgb.v
 //========================================================================
@@ -33,15 +34,20 @@ module tb_bilinear_rgb;
     localparam IN_W = 112;        // 真图（Step 9，feibi resize）
     localparam IN_H = 103;
 `endif
-    // 放大倍数：iverilog 加 -DSCALE3 验证非 2 幂整数倍（Step 10），默认 2 倍
+    // 缩放倍数（分子/分母）：放大 N 倍 = N/1，缩小 N 倍 = 1/N
+    //   -DSCALE3 放大 3 倍（Step 10），-DDOWN2 缩小 2 倍，-DDOWN3 缩小 3 倍
 `ifdef SCALE3
-    localparam SCALE = 3;
+    localparam SCALE_N = 3; localparam SCALE_D = 1;
+`elsif DOWN2
+    localparam SCALE_N = 1; localparam SCALE_D = 2;
+`elsif DOWN3
+    localparam SCALE_N = 1; localparam SCALE_D = 3;
 `else
-    localparam SCALE = 2;
+    localparam SCALE_N = 2; localparam SCALE_D = 1;   // 默认放大 2 倍
 `endif
     localparam FB    = 8;
-    localparam OUT_W   = IN_W * SCALE;
-    localparam OUT_H   = IN_H * SCALE;
+    localparam OUT_W   = IN_W * SCALE_N / SCALE_D;   // 整数除法截断
+    localparam OUT_H   = IN_H * SCALE_N / SCALE_D;
     localparam OUT_TOTAL = OUT_W * OUT_H;
 `ifdef SMALL
     localparam INIT_FILE = "input_4x3.hex";
@@ -61,7 +67,8 @@ module tb_bilinear_rgb;
     wire o_valid, o_done;
 
     bilinear_rgb_top #(
-        .IN_WIDTH (IN_W), .IN_HEIGHT(IN_H), .SCALE(SCALE),
+        .IN_WIDTH (IN_W), .IN_HEIGHT(IN_H),
+        .SCALE_N(SCALE_N), .SCALE_D(SCALE_D),
         .FRAC_BITS(FB), .INIT_FILE(INIT_FILE)
     ) dut (
         .clk(clk), .rst_n(rst_n), .start(start), .pixel_en(pixel_en),

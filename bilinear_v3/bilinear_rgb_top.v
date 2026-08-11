@@ -1,6 +1,6 @@
 //========================================================================
 // bilinear_rgb_top.v —— 双线性插值缩放顶层（bilinear_v3 版）
-// 功能：RGB888 输入 → 任意整数倍放大 → RGB888 输出
+// 功能：RGB888 输入 → 任意整数倍缩放（放大 N 倍 / 缩小 N 倍）→ RGB888 输出
 //
 // 数据流：
 //   coord_gen（坐标+权重）→ 邻居地址钳位/权重清零标志
@@ -40,7 +40,8 @@
 module bilinear_rgb_top #(
     parameter IN_WIDTH   = 112,     // 输入图像宽
     parameter IN_HEIGHT  = 103,     // 输入图像高
-    parameter SCALE      = 2,       // 放大整数倍（OUT = IN × SCALE）
+    parameter SCALE_N    = 2,       // 缩放倍数（分子）：放大 N 倍 = N/1
+    parameter SCALE_D    = 1,       // 缩放倍数（分母）：缩小 N 倍 = 1/N
     parameter FRAC_BITS  = 8,       // 定点小数位（冻结 8，与插值模块位宽绑定）
     parameter INIT_FILE  = "input.hex"  // $readmemh 初始化文件
 )(
@@ -56,8 +57,8 @@ module bilinear_rgb_top #(
 );
 
     localparam FB        = FRAC_BITS;
-    localparam OUT_WIDTH = IN_WIDTH  * SCALE;
-    localparam OUT_HEIGHT= IN_HEIGHT * SCALE;
+    localparam OUT_WIDTH  = IN_WIDTH  * SCALE_N / SCALE_D;   // 缩放后宽（整数除法截断）
+    localparam OUT_HEIGHT = IN_HEIGHT * SCALE_N / SCALE_D;   // 缩放后高
     localparam XW = $clog2(IN_WIDTH)  + 1;   // 源 x 位宽（与 coord_gen 一致）
     localparam YW = $clog2(IN_HEIGHT) + 1;   // 源 y 位宽
     localparam ADDR_W = $clog2(IN_WIDTH * IN_HEIGHT);   // ROM 地址位宽

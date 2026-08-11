@@ -1,6 +1,6 @@
 # bilinear_v3 · 双线性插值图像缩放（Verilog 手写实现）
 
-> 学习项目 W3 产物：RGB888 输入 → **任意整数倍放大**（2/3/4…倍）→ RGB888 输出
+> 学习项目 W3 产物：RGB888 输入 → **任意整数倍缩放**（放大 N 倍 / 缩小 N 倍）→ RGB888 输出
 > 纯 RTL 推断实现（不依赖任何 FPGA IP），iverilog 仿真验证，2 倍 / 3 倍均全像素比对通过
 
 `Verilog` `双线性插值` `整数倍缩放` `纯 RTL 推断` `8 级流水` `PSNR 58.9dB` `自校验 TB` `iverilog`
@@ -23,13 +23,13 @@
 
 ## 项目简介
 
-把一张 RGB888 图像按**整数倍放大**（`OUT = IN × SCALE`，SCALE 可参数化），双线性插值，输出放大后的 RGB888 图像，并配套完整的验证闭环：
+把一张 RGB888 图像按**整数倍缩放**（`OUT = IN × SCALE_N / SCALE_D`，分子=放大倍数、分母=缩小倍数），双线性插值，输出缩放后的 RGB888 图像，并配套完整的验证闭环：
 
 - **坐标生成**：定点累加器产生每个输出像素对应的源坐标 (sx,sy) 与插值权重 (u,v)，无运行期除法
 - **插值计算**：2×2 邻域 4 像素按权重加权（8 级流水），定点舍入 + 饱和
 - **验证闭环**：真实图片 → COE → 仿真 → 输出 COE → PSNR 校验 + 显示对比
 
-**范围收敛（不做的事）**：缩小、非整数倍放大（如 ×2.56）留待后续版本。
+**范围收敛（不做的事）**：非整数倍缩放未专项验证（参数化支持任意 N/M 比例，验证只覆盖整数倍放大与缩小）。
 
 ---
 
@@ -41,7 +41,7 @@ bilinear_v3/
 ├── coord_gen.v                     # 定点累加坐标/权重生成器（含帧内防御）
 ├── bilinear_interp_8b.v            # 8bit 单通道插值核（LAT=8 流水）
 ├── image_rom.v                     # 推断式 BRAM ROM（$readmemh 初始化）
-├── tb_bilinear_rgb.v               # 顶层全链路自检 TB（-DSMALL 小图 / -DSCALE3 三倍）
+├── tb_bilinear_rgb.v               # 顶层全链路自检 TB（-DSMALL 小图 / -DSCALE3 放大3倍 / -DDOWN2/3 缩小）
 ├── tb_coord_gen_defense.v          # coord_gen 帧内防御专项 TB
 ├── tb_bilinear_interp.v            # 插值核边界/随机/valid 链 TB
 ├── img_to_coe.py                   # 图像(jpg/png) → COE（替代 MATLAB 脚本）
@@ -56,8 +56,12 @@ bilinear_v3/
 ├── resized_preview.jpg             # feibi resize 预览图
 ├── verify_scale_compare.png        # 2 倍放大对比图（左原图 | 右放大）
 ├── verify_scale_compare_s3.png     # 3 倍放大对比图
+├── verify_scale_compare_down2.png   # 缩小 1/2 对比图
+├── verify_scale_compare_down3.png   # 缩小 1/3 对比图
 ├── verify_scale.log                # 2 倍 PSNR 校验日志
 ├── verify_scale_scale3.log         # 3 倍 PSNR 校验日志
+├── verify_scale_down2.log          # 缩小 1/2 PSNR 校验日志
+├── verify_scale_down3.log          # 缩小 1/3 PSNR 校验日志
 ├── bilinear_rgb_top_datapath.html  # 顶层数据流图（浏览器打开）
 ├── 双线性插值缩放实现计划.md        # 实现计划（架构/步骤/风险）
 └── README.md                       # 本文档
@@ -110,7 +114,7 @@ bilinear_v3/
 
 - 组装全链路：coord_gen + 邻居地址钳位 + 4 份 image_rom 并联 + 3 个插值核（R/G/B 各一）
 - 边界处理：sx/sy 越界钳位 + 被钳位方向权重清零（退化为复制）
-- 参数：`IN_WIDTH/IN_HEIGHT/SCALE/FRAC_BITS/INIT_FILE`（头部 include 上述 3 个模块）
+- 参数：`IN_WIDTH/IN_HEIGHT/SCALE_N/SCALE_D/FRAC_BITS/INIT_FILE`（放大 N 倍 = N/1，缩小 N 倍 = 1/N）（头部 include 上述 3 个模块）
 
 ---
 
@@ -131,7 +135,7 @@ bilinear_v3/
 |---|---|---|
 | `tb_coord_gen_defense.v` | coord_gen | 全帧坐标/权重逐拍比对；**帧末防御**（done 后误拉使能不越界）；start 重启 |
 | `tb_bilinear_interp.v` | 插值核 | 边界用例（u/v 四角、纯色、舍入、饱和）；随机 2000 拍；**valid 链**（插气泡，无假/漏有效） |
-| `tb_bilinear_rgb.v` | 顶层全链路 | 全帧逐像素比对 RGB 三通道；输出写 `output.coe`。编译选项：`-DSMALL` 跑 4×3 合成小图，`-DSCALE3` 跑 3 倍放大 |
+| `tb_bilinear_rgb.v` | 顶层全链路 | 全帧逐像素比对 RGB 三通道；输出写 `output.coe`。编译选项：`-DSMALL` 跑 4×3 合成小图，`-DSCALE3` 放大 3 倍，`-DDOWN2`/`-DDOWN3` 缩小 2/3 倍 |
 
 ### Python 脚本（验证链）
 
@@ -171,6 +175,8 @@ bilinear_v3/
 | 合成小图 4×3 → 8×6 | ✅ 48 像素全对 | — |
 | 真图 2 倍 112×103 → 224×206 | ✅ 46144 像素全对 | **58.86 dB**，最大误差 0 LSB |
 | 真图 3 倍 112×103 → 336×309 | ✅ 103824 像素全对 | **59.04 dB**，最大误差 0 LSB |
+| 真图缩小 1/2 112×103 → 56×51 | ✅ 2856 像素全对 | **59.41 dB**，最大误差 0 LSB |
+| 真图缩小 1/3 112×103 → 37×34 | ✅ 1258 像素全对 | **59.07 dB**，最大误差 0 LSB |
 
 ---
 
@@ -185,10 +191,11 @@ python make_tb_input.py --coe input.coe --width 112 --height 103
 
 # 3. 编译 + 仿真（iverilog，-I 指向本目录）
 iverilog -I . -o tb.vvp tb_bilinear_rgb.v
-vvp tb.vvp > sim_top.txt          # 2 倍；加 -DSCALE3 编 3 倍，-DSMALL 跑合成小图
+vvp tb.vvp > sim_top.txt          # 默认 2 倍；-DSCALE3 放大 3 倍，-DDOWN2/-DDOWN3 缩小 2/3 倍，-DSMALL 合成小图
 
 # 4. PSNR 校验 + 对比图（log 存当前目录）
-python verify_scale.py --in-hex input.hex --out-coe output.coe --in-w 112 --in-h 103 --scale 2 --log verify_scale.log
+python verify_scale.py --in-hex input.hex --out-coe output.coe --in-w 112 --in-h 103 --scale-n 2 --scale-d 1 --log verify_scale.log
+# 缩小 2 倍改传 --scale-n 1 --scale-d 2
 
 # 5. 波形查看
 gtkwave tb_bilinear_rgb.vcd
@@ -198,6 +205,7 @@ gtkwave tb_bilinear_rgb.vcd
 
 ## 已知限制与后续
 
-- **只支持整数倍放大**：缩小、非整数倍留待 bilinear_v4+
+- **支持整数倍缩放**（放大 N 倍 / 缩小 N 倍）：非整数倍（N/M 比例）参数化支持但未专项验证
+- **大比例缩小有混叠**：缩小 1/8 及以下时 2×2 采样不抗混叠，PSNR 显著下降（验证覆盖 1/2、1/3）
 - **ROM 随输入尺寸线性膨胀**：4 份 image_rom 并联（学习小图可接受），大图需行缓存方案（W4）
 - 行缓存复用在 W4 卷积（`line_buffer_nxn`），本工程刻意不用（见计划文档修订记录）
