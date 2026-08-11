@@ -31,7 +31,7 @@
 |---|---|---|
 | **行缓存（LINE_BUFFER）** | 邻域运算地基 | N×N 窗口生成器，卷积/缩放/滤波的复用底座 |
 | **色彩空间转换（CSC）** | 逐像素点运算 | RGB → YCbCr（BT.601），1 对 1 映射，不需要行缓存 |
-| **双线性插值缩放（bilinear_v3）** | 邻域运算 | 任意整数倍图像放大，定点累加 + 8 级流水插值 |
+| **双线性插值缩放（bilinear_v3）** | 邻域运算 | 任意整数倍缩放（放大 N 倍 / 缩小 N 倍），定点累加 + 8 级流水插值 |
 
 每个子系统都遵循同样的学习闭环：**算法原理推导 → 定点化设计 → 手写 RTL → 自校验 TB → 独立脚本二次校验 → 中文讲解文档**。
 
@@ -96,7 +96,7 @@ RGB → YCbCr（BT.601），**逐像素点运算**（1 对 1 映射），数学�
 
 ### bilinear_v3 · 双线性插值缩放（W3）
 
-RGB888 图像按**整数倍放大**（`OUT = IN × SCALE`，SCALE 参数化），纯 RTL 推断实现：
+RGB888 图像按**整数倍缩放**（`OUT = IN × SCALE_N / SCALE_D`，分子=放大倍数、分母=缩小倍数），纯 RTL 推断实现：
 
 | 模块 | 职责 |
 |---|---|
@@ -112,6 +112,8 @@ RGB888 图像按**整数倍放大**（`OUT = IN × SCALE`，SCALE 参数化）�
 | 合成小图 4×3 → 8×6 | ✅ 48 像素全对 | — |
 | 真图 2 倍 112×103 → 224×206 | ✅ 46144 像素全对 | **58.86 dB**，最大误差 0 LSB |
 | 真图 3 倍 112×103 → 336×309 | ✅ 103824 像素全对 | **59.04 dB**，最大误差 0 LSB |
+| 真图缩小 1/2 112×103 → 56×51 | ✅ 2856 像素全对 | **59.41 dB**，最大误差 0 LSB |
+| 真图缩小 1/3 112×103 → 37×34 | ✅ 1258 像素全对 | **59.07 dB**，最大误差 0 LSB |
 
 验证闭环：`真实图片 → COE → 仿真 → 输出 COE → PSNR 校验 + 对比图渲染`。
 
@@ -135,7 +137,7 @@ image_fpga_study/
 │   ├── shift_v/               #   移位代替乘法版
 │   ├── matlab/                #   浮点参考实现
 │   └── README.md
-├── bilinear_v3/               # W3 双线性插值整数倍放大
+├── bilinear_v3/               # W3 双线性插值整数倍缩放
 │   ├── 4 个 RTL + 3 个 TB     #   coord_gen / interp / rom / top
 │   ├── *.py                   #   图像↔COE bridge + PSNR 校验脚本
 │   ├── *.jpg / *.png / *.coe / *.hex  # 测试数据与验证产物
@@ -166,7 +168,8 @@ python verify_csc.py      # 独立算法二次校验（解析 sim_log.txt 重算
 cd ../../bilinear_v3
 iverilog -I . -o tb.vvp tb_bilinear_rgb.v
 vvp tb.vvp > sim_top.txt
-python verify_scale.py --in-hex input.hex --out-coe output.coe --in-w 112 --in-h 103 --scale 2 --log verify_scale.log
+python verify_scale.py --in-hex input.hex --out-coe output.coe --in-w 112 --in-h 103 --scale-n 2 --scale-d 1 --log verify_scale.log
+# 缩小 2 倍改传 --scale-n 1 --scale-d 2
 ```
 
 查看波形：`gtkwave tb_x.vcd`
@@ -191,7 +194,7 @@ python verify_scale.py --in-hex input.hex --out-coe output.coe --in-w 112 --in-h
 - **CSC Cb_G 系数不一致**：3stage 版取 86（截断）、selftest 版取 87（四舍五入），TB 期望应优先复用 `dut.*` 层次引用
 - **FIFO 行缓存版**：外部参考代码，无 TB；读模式必须 FWFT（标准模式每级斜 1 像素）；存在 `always @(*)` 内用 `<=` 等代码风格问题
 - **padding 版依赖 blanking**：h-blank≥1 拍、v-blank≥W+8 拍，无空拍则物理上无法补出全尺寸
-- **bilinear_v3 只支持整数倍放大**：缩小、非整数倍留待后续版本；4 份 ROM 并联随输入尺寸线性膨胀
+- **bilinear_v3 支持整数倍缩放**（放大 N 倍 / 缩小 N 倍）：非整数倍（N/M 比例）参数化支持但未专项验证；大比例缩小（1/8 及以下）2×2 采样不抗混叠，PSNR 显著下降；4 份 ROM 并联随输入尺寸线性膨胀
 
 ---
 
