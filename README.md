@@ -14,7 +14,9 @@
 - [子系统一览](#子系统一览)
   - [LINE_BUFFER · 行缓存（W1）](#line_buffer--行缓存w1)
   - [CSC · 色彩空间转换（W2）](#csc--色彩空间转换w2)
-  - [bilinear_v3 · 双线性插值缩放（W3）](#bilinear_v3--双线性插值缩放w3)
+  - [bilinear · 双线性插值缩放（W3）](#bilinear--双线性插值缩放w3)
+    - [bilinear_v3 · 整图 ROM 版](#bilinear_v3--整图-rom-版)
+    - [bilinear_v4 · 行缓存版](#bilinear_v4--行缓存版)
 - [目录结构](#目录结构)
 - [快速开始](#快速开始)
 - [验证工具链](#验证工具链)
@@ -31,7 +33,7 @@
 |---|---|---|
 | **行缓存（LINE_BUFFER）** | 邻域运算地基 | N×N 窗口生成器，卷积/缩放/滤波的复用底座 |
 | **色彩空间转换（CSC）** | 逐像素点运算 | RGB → YCbCr（BT.601），1 对 1 映射，不需要行缓存 |
-| **双线性插值缩放（bilinear_v3）** | 邻域运算 | 任意整数倍缩放（放大 N 倍 / 缩小 N 倍），定点累加 + 8 级流水插值 |
+| **双线性插值缩放（bilinear）** | 邻域运算 | 任意整数倍缩放（放大 N 倍 / 缩小 N 倍）；v3 整图 ROM 版 + v4 行缓存版（大图/实时视频） |
 
 每个子系统都遵循同样的学习闭环：**算法原理推导 → 定点化设计 → 手写 RTL → 自校验 TB → 独立脚本二次校验 → 中文讲解文档**。
 
@@ -43,7 +45,7 @@
 |---|---|---|---|
 | W1 | 行缓存范式 | 手写行缓存仿真跑通；讲清 BRAM 存 N-1 行 + 窗口移位、为什么用 BRAM 不用 FIFO | ✅ `LINE_BUFFER/` |
 | W2 | 手写 CSC（不用 IP） | 手写 CSC 仿真跑通；能推导转换矩阵；讲清定点化位宽与限幅 | ✅ `CSC/` |
-| W3 | 双线性插值缩放 | 手写缩放仿真跑通；能讲四权重计算、行列两级衔接 | ✅ `bilinear_v3/` |
+| W3 | 双线性插值缩放 | 手写缩放仿真跑通；能讲四权重计算、行列两级衔接 | ✅ `bilinear/`（v3 整图 ROM 版 + v4 行缓存版） |
 | W4 | 2D 卷积滤波 + 收尾 | 均值/高斯卷积仿真跑通；四模块串链路 | ⬜ 待执行 |
 
 ---
@@ -94,9 +96,11 @@ RGB → YCbCr（BT.601），**逐像素点运算**（1 对 1 映射），数学�
 
 ---
 
-### bilinear_v3 · 双线性插值缩放（W3）
+### bilinear · 双线性插值缩放（W3）
 
-RGB888 图像按**整数倍缩放**（`OUT = IN × SCALE_N / SCALE_D`，分子=放大倍数、分母=缩小倍数），纯 RTL 推断实现：
+RGB888 图像按**整数倍缩放**（`OUT = IN × SCALE_N / SCALE_D`，分子=放大倍数、分母=缩小倍数），两个版本：v3 整图 ROM 版（小图学习）与 v4 行缓存版（大图/实时视频）。
+
+#### bilinear_v3 · 整图 ROM 版
 
 | 模块 | 职责 |
 |---|---|
@@ -117,7 +121,21 @@ RGB888 图像按**整数倍缩放**（`OUT = IN × SCALE_N / SCALE_D`，分子=�
 
 验证闭环：`真实图片 → COE → 仿真 → 输出 COE → PSNR 校验 + 对比图渲染`。
 
-文档：[bilinear_v3/README.md](bilinear_v3/README.md)（含模块职责、数据流、复现步骤）
+文档：[bilinear/bilinear_v3/README.md](bilinear/bilinear_v3/README.md)
+
+#### bilinear_v4 · 行缓存版
+
+用 3 行环形行缓存替代 v3 的 4 份整图 ROM，支持**流式像素输入**（din/din_valid）与双端反压（rd_ready/wr_ready），存储恒定——1920×1080 下 v3 ≈5500 块 BRAM（爆）vs v4 ≈3 块 BRAM。复用 v3 的 coord_gen / 插值核 / 验证链（零改动）。
+
+验证结果（含随机气泡反压压力测试）：
+
+| 场景 | TB 自检 | PSNR（独立浮点参考） |
+|---|---|---|
+| 合成小图放大 2 倍 4×3 → 8×6 | ✅ 48 像素全对 | — |
+| 真图放大 2 倍 112×103 → 224×206 | ✅ 46144 像素全对 | **58.86 dB**（与 v3 一致） |
+| 真图缩小 1/2 112×103 → 56×51 | ✅ 2856 像素全对 | **59.41 dB**（与 v3 一致） |
+
+文档：[bilinear/bilinear_v4/README.md](bilinear/bilinear_v4/README.md)
 
 ---
 
@@ -137,11 +155,16 @@ image_fpga_study/
 │   ├── shift_v/               #   移位代替乘法版
 │   ├── matlab/                #   浮点参考实现
 │   └── README.md
-├── bilinear_v3/               # W3 双线性插值整数倍缩放
-│   ├── 4 个 RTL + 3 个 TB     #   coord_gen / interp / rom / top
-│   ├── *.py                   #   图像↔COE bridge + PSNR 校验脚本
-│   ├── *.jpg / *.png / *.coe / *.hex  # 测试数据与验证产物
-│   └── README.md
+├── bilinear/                  # W3 双线性插值整数倍缩放
+│   ├── bilinear_v3/           #   整图 ROM 版（小图学习）
+│   │   ├── 4 个 RTL + 3 个 TB #   coord_gen / interp / rom / top
+│   │   ├── *.py               #   图像↔COE bridge + PSNR 校验脚本
+│   │   ├── *.jpg / *.png / *.coe / *.hex  # 测试数据与验证产物
+│   │   └── README.md
+│   └── bilinear_v4/           #   行缓存版（大图/实时视频，流式输入 + 反压）
+│       ├── line_cache2.v / bilinear_lb_top.v / tb_bilinear_lb.v
+│       ├── line_buffer_principle.html
+│       └── README.md
 ├── .gitignore                 # 仿真产物（*.vcd/*.vvp/*.v.out 等）
 └── README.md                  # 本文档
 ```
@@ -165,7 +188,7 @@ vvp tb.vvp > sim_log.txt  # 期望输出: 9885 拍全部 PASS
 python verify_csc.py      # 独立算法二次校验（解析 sim_log.txt 重算比对）
 
 # 3. 双线性缩放（完整验证链）
-cd ../../bilinear_v3
+cd ../../bilinear/bilinear_v3
 iverilog -I . -o tb.vvp tb_bilinear_rgb.v
 vvp tb.vvp > sim_top.txt
 python verify_scale.py --in-hex input.hex --out-coe output.coe --in-w 112 --in-h 103 --scale-n 2 --scale-d 1 --log verify_scale.log
@@ -194,7 +217,7 @@ python verify_scale.py --in-hex input.hex --out-coe output.coe --in-w 112 --in-h
 - **CSC Cb_G 系数不一致**：3stage 版取 86（截断）、selftest 版取 87（四舍五入），TB 期望应优先复用 `dut.*` 层次引用
 - **FIFO 行缓存版**：外部参考代码，无 TB；读模式必须 FWFT（标准模式每级斜 1 像素）；存在 `always @(*)` 内用 `<=` 等代码风格问题
 - **padding 版依赖 blanking**：h-blank≥1 拍、v-blank≥W+8 拍，无空拍则物理上无法补出全尺寸
-- **bilinear_v3 支持整数倍缩放**（放大 N 倍 / 缩小 N 倍）：非整数倍（N/M 比例）参数化支持但未专项验证；大比例缩小（1/8 及以下）2×2 采样不抗混叠，PSNR 显著下降；4 份 ROM 并联随输入尺寸线性膨胀
+- **bilinear 支持整数倍缩放**（放大 N 倍 / 缩小 N 倍）：非整数倍（N/M 比例）参数化支持但未专项验证；大比例缩小（1/8 及以下）2×2 采样不抗混叠，PSNR 显著下降；v3 的 4 份 ROM 随输入尺寸线性膨胀（v4 行缓存版存储恒定，行列并行度需按 BRAM 读端口另行考量）
 
 ---
 

@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>行缓存（Line Buffer）原理图解</title>
+  <style>
+    body {
+      font-family: "Microsoft YaHei", "PingFang SC", SimHei, sans-serif;
+      margin: 0; padding: 24px; background: #f5f7fa; color: #333;
+    }
+    .page { max-width: 1260px; margin: 0 auto; background: #fff; border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08); padding: 28px 32px 40px; }
+    h1 { font-size: 22px; color: #1f4e79; margin: 0 0 6px; }
+    .subtitle { font-size: 13px; color: #666; margin: 0 0 20px; }
+    h2 { font-size: 16px; color: #1f4e79; border-left: 4px solid #4a82c3; padding-left: 10px; margin: 28px 0 12px; }
+    svg { width: 100%; height: auto; max-width: 1200px; display: block; margin: 0 auto;
+          border: 1px solid #e3e8ef; border-radius: 8px; background: #fff; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { border: 1px solid #dde3ea; padding: 8px 12px; text-align: left; }
+    th { background: #eef4fb; color: #1f4e79; }
+    tr:nth-child(even) td { background: #fafbfd; }
+    code { background: #f0f2f5; padding: 1px 6px; border-radius: 4px; font-size: 12px; color: #c0341d; }
+    ul { font-size: 13px; line-height: 1.9; padding-left: 22px; }
+    .tag { display: inline-block; background: #eef4fb; color: #1f4e79; border-radius: 4px;
+           padding: 2px 8px; font-size: 12px; margin-right: 6px; }
+  </style>
+</head>
+<body>
+  <div class="page">
+
+    <h1>行缓存（Line Buffer）原理图解</h1>
+    <p class="subtitle">
+      为什么需要行缓存 · 3 行环形缓冲怎么工作 · 行就绪与反压如何协调写读两端
+      ｜ 配套工程：<code>bilinear/bilinear_v4</code>（行缓存版双线性缩放）
+    </p>
+
+    <!-- ======================= 图1：为什么需要行缓存 ======================= -->
+    <h2>一、为什么需要行缓存：存储随图像尺寸的问题</h2>
+    <svg viewBox="0 0 1200 300" font-family="Microsoft YaHei, SimHei, sans-serif">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#1a6b3c"/>
+        </marker>
+      </defs>
+
+      <!-- 左：整图 ROM -->
+      <rect x="40" y="60" width="300" height="150" rx="10" fill="#fdf0f0" stroke="#d9822b" stroke-width="2"/>
+      <text x="190" y="88" text-anchor="middle" font-size="15" font-weight="bold" fill="#a34b1f">整图 ROM（v3 现有方案）</text>
+      <text x="190" y="112" text-anchor="middle" font-size="12" fill="#555">整帧像素全存进 BRAM</text>
+      <text x="190" y="135" text-anchor="middle" font-size="12" fill="#555">想读哪就读哪（随机访问）</text>
+      <text x="190" y="160" text-anchor="middle" font-size="13" font-weight="bold" fill="#c0341d">存储 = 整帧 × 24bit × 4 份</text>
+      <text x="190" y="185" text-anchor="middle" font-size="12" fill="#888">1920×1080 ≈ 5500 块 BRAM（爆）</text>
+
+      <!-- 右：行缓存 -->
+      <rect x="560" y="60" width="320" height="150" rx="10" fill="#eefaf0" stroke="#2e8b57" stroke-width="2"/>
+      <text x="720" y="88" text-anchor="middle" font-size="15" font-weight="bold" fill="#1a6b3c">行缓存（v4 新方案）</text>
+      <text x="720" y="112" text-anchor="middle" font-size="12" fill="#555">只存 N 行（本工程 3 行）</text>
+      <text x="720" y="135" text-anchor="middle" font-size="12" fill="#555">像素流式进、流式出</text>
+      <text x="720" y="160" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a6b3c">存储 = 3 行 × 行宽 × 24bit</text>
+      <text x="720" y="185" text-anchor="middle" font-size="12" fill="#888">1920×1080 ≈ 3 块 BRAM（恒定）</text>
+
+      <!-- 中间：换存储换来的代价 -->
+      <text x="495" y="130" text-anchor="middle" font-size="22" fill="#999">vs</text>
+      <text x="495" y="160" text-anchor="middle" font-size="11" fill="#999">代价：</text>
+      <text x="495" y="178" text-anchor="middle" font-size="11" fill="#999">读写要协调</text>
+
+      <!-- 底部结论 -->
+      <text x="600" y="260" text-anchor="middle" font-size="13" fill="#1f4e79">
+        一句话：整图 ROM 用"存储换简单"，行缓存用"协调换存储"——只存 3 行，但写和读必须同步
+      </text>
+    </svg>
+
+    <!-- ======================= 图2：3 行环形缓冲结构 ======================= -->
+    <h2>二、3 行环形缓冲结构（写读分离）</h2>
+    <svg viewBox="0 0 1200 420" font-family="Microsoft YaHei, SimHei, sans-serif">
+      <defs>
+        <marker id="arrB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#1a6b3c"/>
+        </marker>
+        <marker id="arrG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#2e8b57"/>
+        </marker>
+        <marker id="arrO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#e07b00"/>
+        </marker>
+      </defs>
+
+      <!-- 写侧 -->
+      <text x="150" y="44" text-anchor="middle" font-size="14" font-weight="bold" fill="#1a6b3c">写侧（流式输入，光栅顺序）</text>
+      <rect x="50" y="60" width="200" height="56" rx="8" fill="#eefaf0" stroke="#2e8b57"/>
+      <text x="150" y="84" text-anchor="middle" font-size="12" fill="#1a6b3c">din[23:0] + din_valid</text>
+      <text x="150" y="104" text-anchor="middle" font-size="11" fill="#666">每拍一个像素，从左到右逐行</text>
+
+      <!-- 写指针 -->
+      <text x="330" y="84" text-anchor="middle" font-size="12" fill="#1a6b3c">写指针 w</text>
+      <text x="330" y="102" text-anchor="middle" font-size="11" fill="#666">当前写第 w 行</text>
+      <line x1="252" y1="88" x2="380" y2="88" stroke="#1a6b3c" stroke-width="2" marker-end="url(#arrB)"/>
+
+      <!-- 3 个槽位 -->
+      <rect x="390" y="60" width="360" height="56" rx="8" fill="#eef4fb" stroke="#4a82c3" stroke-width="2"/>
+      <text x="570" y="84" text-anchor="middle" font-size="13" font-weight="bold" fill="#1f4e79">槽位 A（存源行 w%3）</text>
+      <text x="570" y="104" text-anchor="middle" font-size="11" fill="#666">行宽 IN_W 个像素的 reg 数组</text>
+
+      <rect x="390" y="124" width="360" height="56" rx="8" fill="#eef4fb" stroke="#4a82c3" stroke-width="2"/>
+      <text x="570" y="148" text-anchor="middle" font-size="13" font-weight="bold" fill="#1f4e79">槽位 B</text>
+      <text x="570" y="168" text-anchor="middle" font-size="11" fill="#666">源行 r 固定存槽位 r%3（环形）</text>
+
+      <rect x="390" y="188" width="360" height="56" rx="8" fill="#eef4fb" stroke="#4a82c3" stroke-width="2"/>
+      <text x="570" y="212" text-anchor="middle" font-size="13" font-weight="bold" fill="#1f4e79">槽位 C</text>
+      <text x="570" y="232" text-anchor="middle" font-size="11" fill="#666">3 行正好：写 1 行 + 读 2 行</text>
+
+      <!-- 读窗口 -->
+      <line x1="752" y1="88" x2="880" y2="88" stroke="#2e8b57" stroke-width="2"/>
+      <line x1="752" y1="152" x2="880" y2="152" stroke="#2e8b57" stroke-width="2"/>
+      <text x="820" y="78" text-anchor="middle" font-size="12" fill="#2e8b57">读窗口 {sy, sy+1}</text>
+      <text x="820" y="120" text-anchor="middle" font-size="11" fill="#666">双线性要 2 行</text>
+
+      <!-- 4 邻居 -->
+      <rect x="890" y="56" width="240" height="130" rx="8" fill="#fdf6ec" stroke="#e07b00"/>
+      <text x="1010" y="80" text-anchor="middle" font-size="13" font-weight="bold" fill="#a34b1f">2×2 邻域取数</text>
+      <text x="1010" y="102" text-anchor="middle" font-size="11" fill="#555">(sy,sx)   (sy,sx+1)</text>
+      <text x="1010" y="120" text-anchor="middle" font-size="11" fill="#555">(sy+1,sx) (sy+1,sx+1)</text>
+      <text x="1010" y="152" text-anchor="middle" font-size="11" fill="#666">按源坐标随机读</text>
+      <text x="1010" y="170" text-anchor="middle" font-size="11" fill="#666">（不是顺序读！）</text>
+
+      <!-- 插值核 -->
+      <rect x="890" y="230" width="240" height="56" rx="8" fill="#eefaf0" stroke="#2e8b57"/>
+      <text x="1010" y="254" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a6b3c">3×bilinear_interp_8b</text>
+      <text x="1010" y="274" text-anchor="middle" font-size="11" fill="#666">插值 → o_r/o_g/o_b</text>
+      <line x1="1010" y1="188" x2="1010" y2="228" stroke="#e07b00" stroke-width="2" marker-end="url(#arrO)"/>
+
+      <!-- 底部说明 -->
+      <text x="600" y="340" text-anchor="middle" font-size="13" fill="#1f4e79">
+        写侧只认"当前写到第几行"，读侧只认"源坐标 (sy,sx)"——两者通过行就绪/反压协调
+      </text>
+      <text x="600" y="366" text-anchor="middle" font-size="12" fill="#666">
+        关键差别：ROM 版是"读整帧随时可读"，行缓存版是"读侧想要的行必须已经写进来"
+      </text>
+    </svg>
+
+    <!-- ======================= 图3：行就绪与反压 ======================= -->
+    <h2>三、行就绪与反压（写读协调的核心机制）</h2>
+    <svg viewBox="0 0 1200 470" font-family="Microsoft YaHei, SimHei, sans-serif">
+      <defs>
+        <marker id="arrC2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#c0341d"/>
+        </marker>
+      </defs>
+
+      <!-- 两条泳道：写侧 / 读侧 -->
+      <text x="600" y="40" text-anchor="middle" font-size="15" font-weight="bold" fill="#1f4e79">两条游标 + 两条判定式 = 任意缩放比</text>
+
+      <!-- 写侧泳道 -->
+      <rect x="40" y="60" width="1120" height="120" rx="8" fill="#fafbfd" stroke="#dde3ea"/>
+      <text x="60" y="84" font-size="13" font-weight="bold" fill="#1a6b3c">写侧游标 w：</text>
+      <text x="60" y="106" font-size="12" fill="#555">正在写第 w 行（光栅顺序），写完一行 w+1</text>
+      <text x="60" y="128" font-size="12" fill="#1a6b3c">写反压（最关键）：</text>
+      <rect x="200" y="104" width="520" height="52" rx="8" fill="#eefaf0" stroke="#2e8b57"/>
+      <text x="460" y="128" text-anchor="middle" font-size="13" font-weight="bold" fill="#1a6b3c">wr_ready = (w ≤ sy+1) && 输入未结束</text>
+      <text x="460" y="148" text-anchor="middle" font-size="11" fill="#666">写侧最多写到"读窗口顶行"——再写就会覆盖读侧正在用的行</text>
+
+      <!-- 读侧泳道 -->
+      <rect x="40" y="200" width="1120" height="120" rx="8" fill="#fafbfd" stroke="#dde3ea"/>
+      <text x="60" y="224" font-size="13" font-weight="bold" fill="#2e8b57">读侧游标 sy：</text>
+      <text x="60" y="246" font-size="12" fill="#555">coord_gen 输出源坐标 (sy,sx)，窗口 {sy, sy+1}</text>
+      <text x="60" y="268" font-size="12" fill="#2e8b57">读反压：</text>
+      <rect x="180" y="240" width="560" height="52" rx="8" fill="#eef4fb" stroke="#4a82c3"/>
+      <text x="460" y="264" text-anchor="middle" font-size="13" font-weight="bold" fill="#1f4e79">rd_ready = 行 (sy+1) 已写完</text>
+      <text x="460" y="284" text-anchor="middle" font-size="11" fill="#666">读侧要的行还没写进来 → 输出暂停，等写侧</text>
+
+      <!-- 两种场景 -->
+      <text x="600" y="350" text-anchor="middle" font-size="14" font-weight="bold" fill="#1f4e79">两种场景，谁落后谁等待</text>
+
+      <rect x="40" y="370" width="545" height="80" rx="8" fill="#fdf0f0" stroke="#d9822b"/>
+      <text x="312" y="394" text-anchor="middle" font-size="13" font-weight="bold" fill="#a34b1f">放大 N 倍：写快读慢</text>
+      <text x="312" y="416" text-anchor="middle" font-size="12" fill="#555">输出像素多，读侧消耗行慢</text>
+      <text x="312" y="438" text-anchor="middle" font-size="12" fill="#c0341d">写侧追上来 → wr_ready=0 暂停，等读侧滑过</text>
+
+      <rect x="615" y="370" width="545" height="80" rx="8" fill="#eef4fb" stroke="#4a82c3"/>
+      <text x="887" y="394" text-anchor="middle" font-size="13" font-weight="bold" fill="#1f4e79">缩小 N 倍：写慢读快</text>
+      <text x="887" y="416" text-anchor="middle" font-size="12" fill="#555">输出像素少，读侧消耗行快</text>
+      <text x="887" y="438" text-anchor="middle" font-size="12" fill="#c0341d">读侧追上来 → rd_ready=0 暂停，等写侧写完</text>
+    </svg>
+
+    <!-- ======================= 与 ROM 版对比表 ======================= -->
+    <h2>四、与整图 ROM 版（bilinear_v3）对比</h2>
+    <table>
+      <tr><th>维度</th><th>整图 ROM（v3）</th><th>行缓存（v4）</th></tr>
+      <tr><td>存储</td><td>整帧 × 4 份（随图像尺寸线性膨胀）</td><td>3 行 × 行宽（恒定，随行宽）</td></tr>
+      <tr><td>输入方式</td><td>整帧先就绪（$readmemh），再随机读</td><td>流式输入（din/din_valid），边进边出</td></tr>
+      <tr><td>读侧</td><td>任意随机读，零等待</td><td>按源坐标读，行未就绪要等（rd_ready）</td></tr>
+      <tr><td>写侧</td><td>无（只读）</td><td>要等读侧释放行（wr_ready）</td></tr>
+      <tr><td>实现难度</td><td>简单（凭什么是它先做出来）</td><td>多一套行就绪/反压协调逻辑</td></tr>
+      <tr><td>适用场景</td><td>小图学习、整帧可用</td><td>大图、实时视频流（1920×1080 可行）</td></tr>
+    </table>
+
+    <!-- ======================= 一句话总结 ======================= -->
+    <h2>五、一句话总结</h2>
+    <ul>
+      <li><b>行缓存 = 只存 N 行的"滑动窗口"</b>：双线性要 2 行邻域，所以缓存 2 行 + 写侧当前写的 1 行 = <b>3 行环形</b>正好。</li>
+      <li><b>写侧是"生产者"</b>（光栅顺序），<b>读侧是"消费者"</b>（按源坐标随机读）——两者速率不同，靠<b>行就绪 + 反压</b>协调：谁落后谁等待。</li>
+      <li><b>两条判定式管全部</b>：写侧最多写到读窗口顶行（wr_ready），读侧要的行必须写完（rd_ready）——放大缩小都适用，不需要为缩放比写特殊逻辑。</li>
+      <li><b>和 line_buffer_3x3 不一样</b>：卷积的行缓存是"延迟链"（输入 1 拍出 1 窗口，读写 1:1 同步）；缩放是"随机读"，必须用环形 + 行就绪。</li>
+      <li>插值核、坐标生成、钳位/权重清零与 v3 完全复用——只把"4 份整图 ROM"换成"3 行环形缓冲 + 协调逻辑"。</li>
+    </ul>
+
+  </div>
+</body>
+</html>
