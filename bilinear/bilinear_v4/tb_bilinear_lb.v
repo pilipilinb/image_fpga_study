@@ -23,6 +23,9 @@ module tb_bilinear_lb;
 `ifdef SMALL
     localparam IN_W = 4;          // 合成小图
     localparam IN_H = 3;
+`elsif BIG
+    localparam IN_W = 950;        // 大图（feibi 原尺寸，性能验证）
+    localparam IN_H = 1092;
 `else
     localparam IN_W = 112;        // 真图
     localparam IN_H = 103;
@@ -31,6 +34,8 @@ module tb_bilinear_lb;
     localparam SCALE_N = 3; localparam SCALE_D = 1;
 `elsif DOWN2
     localparam SCALE_N = 1; localparam SCALE_D = 2;
+`elsif BIG
+    localparam SCALE_N = 1; localparam SCALE_D = 3;   // 大图缩小 3 倍
 `else
     localparam SCALE_N = 2; localparam SCALE_D = 1;
 `endif
@@ -41,6 +46,8 @@ module tb_bilinear_lb;
     localparam IN_TOTAL  = IN_W * IN_H;
 `ifdef SMALL
     localparam INIT_FILE = "input_4x3.hex";
+`elsif BIG
+    localparam INIT_FILE = "input_big.hex";
 `else
     localparam INIT_FILE = "input.hex";
 `endif

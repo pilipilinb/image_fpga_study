@@ -17,9 +17,11 @@
 //   rd_ready = 行 sy+1 已写完（读侧等写；缩小时读快暂停等写）
 //   谁落后谁等待，无死锁（详见 line_cache2.v 注释）
 //
-// 与 v3 顶层的时序差异：
-//   line_cache2 为组合读（0 拍潜伏），u/v/valid0/4 邻居同拍喂核，
-//   无需 v3 的"对齐寄存 1 拍"（那是 ROM 同步读潜伏 1 拍造成的）
+// 时序（BRAM 同步读 1 拍潜伏）：
+//   T 拍：  coord_gen 组合输出 (sx,sy,u,v,valid0)；line_cache2 读地址锁入
+//   T+1 拍：4 邻居输出；u/v/valid/钳位标志打 1 拍对齐后喂核（与 4 邻居同拍）
+//   T+2..T+9：核 8 级流水（LAT=8）
+//   T+9 拍： o_r/o_g/o_b + o_valid 输出
 //
 // 复用：coord_gen / bilinear_interp_8b 零改动；钳位/权重清零逻辑与 v3 相同
 // 大图升级：line_cache2 换 BRAM 时读变同步（1 拍），此处需补对齐寄存
@@ -111,12 +113,34 @@ module bilinear_lb_top #(
     assign in_ready = wr_ready;
 
     //========================================================================
-    // 越界方向权重清零（组合，与 v3 一致；行缓存组合读与 u/v 同拍，无需延迟）
+    // 对齐寄存（BRAM 同步读 1 拍潜伏：4 邻居晚 1 拍，坐标/权重/valid/钳位标志也打 1 拍）
     //========================================================================
     wire clamp_u = (sx >= IN_WIDTH-1);
     wire clamp_v = (sy >= IN_HEIGHT-1);
-    wire [FB-1:0] u_core = clamp_u ? {FB{1'b0}} : u;
-    wire [FB-1:0] v_core = clamp_v ? {FB{1'b0}} : v;
+
+    reg [FB-1:0] u_d1, v_d1;
+    reg          valid_d1;
+    reg          clamp_u_d1, clamp_v_d1;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            u_d1       <= {FB{1'b0}};
+            v_d1       <= {FB{1'b0}};
+            valid_d1   <= 1'b0;
+            clamp_u_d1 <= 1'b0;
+            clamp_v_d1 <= 1'b0;
+        end else begin
+            u_d1       <= u;
+            v_d1       <= v;
+            valid_d1   <= valid0;
+            clamp_u_d1 <= clamp_u;
+            clamp_v_d1 <= clamp_v;
+        end
+    end
+
+    // 越界方向权重清零（用延迟 1 拍后的钳位标志，与 4 邻居同拍）
+    wire [FB-1:0] u_core = clamp_u_d1 ? {FB{1'b0}} : u_d1;
+    wire [FB-1:0] v_core = clamp_v_d1 ? {FB{1'b0}} : v_d1;
 
     //========================================================================
     // 3×bilinear_interp_8b：R/G/B 各一核，共用权重/valid 驱动
@@ -134,7 +158,7 @@ module bilinear_lb_top #(
         .p01       (dout10[23:16]),
         .p10       (dout01[23:16]),
         .p11       (dout11[23:16]),
-        .valid_in  (valid0),
+        .valid_in  (valid_d1),
         .pix_out   (r_out),
         .valid_out (v_r)
     );
@@ -148,7 +172,7 @@ module bilinear_lb_top #(
         .p01       (dout10[15:8]),
         .p10       (dout01[15:8]),
         .p11       (dout11[15:8]),
-        .valid_in  (valid0),
+        .valid_in  (valid_d1),
         .pix_out   (g_out),
         .valid_out (v_g)
     );
@@ -162,7 +186,7 @@ module bilinear_lb_top #(
         .p01       (dout10[7:0]),
         .p10       (dout01[7:0]),
         .p11       (dout11[7:0]),
-        .valid_in  (valid0),
+        .valid_in  (valid_d1),
         .pix_out   (b_out),
         .valid_out (v_b)
     );
