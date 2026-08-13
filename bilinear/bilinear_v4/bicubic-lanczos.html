@@ -21,7 +21,14 @@
   --code-border: #dde1e8;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, 'Microsoft YaHei', 'Noto Sans CJK SC', 'Segoe UI', sans-serif; background: var(--bg); color: var(--ink); line-height: 1.75; font-size: 15px; -webkit-font-smoothing: antialiased; }
+body {
+  font-family: -apple-system, 'Microsoft YaHei', 'Noto Sans CJK SC', 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  line-height: 1.75;
+  font-size: 15px;
+  -webkit-font-smoothing: antialiased;
+}
 .container { max-width: 920px; margin: 0 auto; padding: 2rem 1.5rem 6rem; }
 h1 { font-size: 1.9rem; font-weight: 800; margin: 1rem 0 0.3rem; letter-spacing: -0.02em; }
 .subtitle { color: var(--muted); font-size: 0.9rem; margin-bottom: 2rem; }
@@ -69,8 +76,10 @@ footer .sources .src-url { display: block; margin-top: 0.15rem; font-size: 0.8re
 </head>
 <body>
 <div class="container">
+
 <h1>双三次插值与 Lanczos 重采样</h1>
 <p class="subtitle">FPGA 图像缩放进阶 · 4 行缓存 + 4 抽头架构 · 2026-08</p>
+
 <div class="toc">
 <h3>目录</h3>
 <ol>
@@ -82,18 +91,68 @@ footer .sources .src-url { display: block; margin-top: 0.15rem; font-size: 0.8re
 <li><a href="#s6">参考开源项目与面试要点</a></li>
 </ol>
 </div>
+
 <!-- ============= 第1章 ============= -->
 <h2 id="s1">1. 为什么需要双三次插值？双线性的局限</h2>
+
 <p>你在 W3 学了双线性插值，它用 <strong>2×2 = 4 个邻居</strong>做加权平均。这个方法简单高效，但有一个致命缺点：<mark class="key">图像放大后会模糊</mark>。</p>
+
 <h3>1.1 双线性的根本问题</h3>
+
 <p>双线性插值本质上是一个<strong>低通滤波器</strong>。它只看最近的 4 个像素，做线性加权，相当于在像素之间"拉直线"。对于边缘和高频细节，这条"直线"会把锐利的边缘<strong>涂抹成渐变</strong>，导致：</p>
+
 <ul>
 <li><strong>边缘模糊</strong>：斜线变成锯齿+模糊带</li>
 <li><strong>细节丢失</strong>：放大后纹理信息消失</li>
 <li><strong>对比度降低</strong>：黑白交界处变成灰色渐变</li>
 </ul>
+
+<div class="diagram-box">
+<svg viewBox="0 0 520 180" xmlns="http://www.w3.org/2000/svg">
+  <text x="10" y="20" fill="var(--accent)" font-size="12" font-weight="bold">双线性：2×2 邻域（4个像素）</text>
+  <rect x="40" y="35" width="40" height="40" fill="rgb(30,30,30)" stroke="var(--rule)"/>
+  <rect x="80" y="35" width="40" height="40" fill="rgb(80,80,80)" stroke="var(--rule)"/>
+  <rect x="40" y="75" width="40" height="40" fill="rgb(60,60,60)" stroke="var(--rule)"/>
+  <rect x="80" y="75" width="40" height="40" fill="rgb(180,180,180)" stroke="var(--rule)"/>
+  <circle cx="85" cy="75" r="4" fill="var(--accent2)"/>
+  <text x="95" y="73" fill="var(--accent2)" font-size="10">插值点</text>
+  <line x1="60" y1="55" x2="80" y2="55" stroke="var(--muted)" stroke-dasharray="3,2"/>
+  <text x="55" y="50" fill="var(--muted)" font-size="9">线性渐变</text>
+
+  <line x1="160" y1="95" x2="200" y2="95" stroke="var(--accent)" stroke-width="2"/>
+  <polygon points="195,90 205,95 195,100" fill="var(--accent)"/>
+
+  <text x="220" y="20" fill="var(--accent)" font-size="12" font-weight="bold">双三次：4×4 邻域（16个像素）</text>
+  <g transform="translate(220,30)">
+    <rect x="0" y="0" width="25" height="25" fill="rgb(20,20,20)" stroke="var(--rule)"/>
+    <rect x="25" y="0" width="25" height="25" fill="rgb(40,40,40)" stroke="var(--rule)"/>
+    <rect x="50" y="0" width="25" height="25" fill="rgb(60,60,60)" stroke="var(--rule)"/>
+    <rect x="75" y="0" width="25" height="25" fill="rgb(100,100,100)" stroke="var(--rule)"/>
+    <rect x="0" y="25" width="25" height="25" fill="rgb(30,30,30)" stroke="var(--rule)"/>
+    <rect x="25" y="25" width="25" height="25" fill="rgb(50,50,50)" stroke="var(--rule)"/>
+    <rect x="50" y="25" width="25" height="25" fill="rgb(70,70,70)" stroke="var(--rule)"/>
+    <rect x="75" y="25" width="25" height="25" fill="rgb(120,120,120)" stroke="var(--rule)"/>
+    <rect x="0" y="50" width="25" height="25" fill="rgb(50,50,50)" stroke="var(--rule)"/>
+    <rect x="25" y="50" width="25" height="25" fill="rgb(80,80,80)" stroke="var(--rule)"/>
+    <rect x="50" y="50" width="25" height="25" fill="rgb(160,160,160)" stroke="var(--rule)" stroke-width="2"/>
+    <rect x="75" y="50" width="25" height="25" fill="rgb(200,200,200)" stroke="var(--rule)"/>
+    <rect x="0" y="75" width="25" height="25" fill="rgb(100,100,100)" stroke="var(--rule)"/>
+    <rect x="25" y="75" width="25" height="25" fill="rgb(150,150,150)" stroke="var(--rule)"/>
+    <rect x="50" y="75" width="25" height="25" fill="rgb(210,210,210)" stroke="var(--rule)"/>
+    <rect x="75" y="75" width="25" height="25" fill="rgb(240,240,240)" stroke="var(--rule)"/>
+    <circle cx="67" cy="67" r="4" fill="var(--accent2)"/>
+    <text x="72" y="62" fill="var(--accent2)" font-size="9">插值点</text>
+  </g>
+  <text x="220" y="140" fill="var(--muted)" font-size="10">考虑了周围 16 个像素的梯度变化</text>
+  <text x="220" y="155" fill="var(--muted)" font-size="10">能更好地保留边缘和细节</text>
+</svg>
+<div class="caption">图1：双线性（4个邻居）vs 双三次（16个邻居）的视野差异</div>
+</div>
+
 <h3>1.2 解决思路：用更多像素 + 更聪明的权重</h3>
-<p>双线性只看 4 个像素，用<mark class="key">线性函数</mark>算权重。要提升画质：</p>
+
+<p>双线性只看 4 个像素，用<mark class="key">线性函数</mark>算权重。要提升画质，有两条路：</p>
+
 <div class="table-wrap">
 <table>
 <tr><th>方法</th><th>邻居数</th><th>权重函数</th><th>行缓存数</th><th>效果</th></tr>
@@ -104,15 +163,36 @@ footer .sources .src-url { display: block; margin-top: 0.15rem; font-size: 0.8re
 <tr><td>Lanczos-3</td><td>36 (6×6)</td><td>sinc×sinc窗</td><td>5</td><td>最锐利，振铃明显</td></tr>
 </table>
 </div>
+
+<div class="note">
+<strong>关键区别</strong>：双三次和 Lanczos-2 都用 4×4 邻域（16个像素），但<strong>权重计算方式不同</strong>。双三次用三次多项式，Lanczos 用 sinc 函数加窗。Lanczos 的频率响应更好，但计算更复杂。
+</div>
+
 <!-- ============= 第2章 ============= -->
 <h2 id="s2">2. 双三次插值原理（Bicubic Interpolation）</h2>
+
 <h3>2.1 核心思想：4×4 邻域 + 三次卷积核</h3>
-<p>设输出像素映射到源图像的坐标为 (x, y)，取整数部分 i = floor(x), j = floor(y)，小数部分 u = x - i, v = y - j。4×4 邻域为 i-1..i+2、j-1..j+2，共 16 个像素。</p>
+
+<p>双三次插值的核心改进：<mark class="key">从 2×2 扩展到 4×4 邻域</mark>，用三次多项式计算 16 个权重。多出来的 12 个像素提供了"曲率信息"，让插值结果不再只是直线，而是<strong>平滑曲线</strong>。</p>
+
+<h4>4×4 邻域的选取规则</h4>
+
+<p>设输出像素映射到源图像的坐标为 (x, y)，取整数部分 i = floor(x), j = floor(y)，小数部分 u = x - i, v = y - j。则 4×4 邻域为：</p>
+
 <div class="formula">
+源像素坐标范围：i-1 到 i+2（x方向），j-1 到 j+2（y方向）
+共 4×4 = 16 个像素：f(i-1, j-1) ... f(i+2, j+2)
+
+插值公式：
 f(x, y) = Σ(m=-1到2) Σ(n=-1到2) f(i+m, j+n) × W(u+m) × W(v+n)
 </div>
+
+<p>其中 W 是三次卷积核（权重函数），u 和 v 是小数部分。</p>
+
 <h3>2.2 三次卷积核公式</h3>
-<p>分段函数（a 通常取 -0.5，OpenCV INTER_CUBIC 默认值）：</p>
+
+<p>双三次插值使用以下分段函数计算权重（a 通常取 <strong>-0.5</strong>，这是 OpenCV INTER_CUBIC 的默认值）<sup><a href="#cite-2">[2]</a></sup>：</p>
+
 <div class="formula">
 W(t) = (a+2)|t|³ - (a+3)|t|² + 1          若 |t| ≤ 1
 W(t) = a|t|³ - 5a|t|² + 8a|t| - 4a        若 1 < |t| < 2
@@ -125,116 +205,582 @@ W(1)   = 0              （整数距离处权重为0）
 W(1.5) = -0.0625        （远邻负权重！）
 W(2)   = 0              （超出范围权重为0）
 </div>
-<h3>2.3 为什么负权重能提升画质？</h3>
-<p>双三次核在 |t| > 1 的区域有<mark class="key">负权重</mark>：远处像素被减去 → 产生过冲（overshoot）→ 边缘更锐利。<mark class="key">负权重 = 锐化 = 边缘增强</mark>。</p>
-<h3>2.4 手算示例：1D 双三次插值</h3>
-<div class="formula">
-输入：f(0)=10, f(1)=20, f(2)=200, f(3)=210，插值位置 x=1.5 → i=1, u=0.5
 
-W(0.5) = 0.5625，W(-0.5) = 0.5625，W(1.5) = -0.0625，W(-1.5) = -0.0625
-权重和 = 1.0 ✓
-
-f(1.5) = 0.5625×20 + 0.5625×200 - 0.0625×10 - 0.0625×210 = <span class="result">110</span>
+<div class="diagram-box">
+<svg viewBox="0 0 520 220" xmlns="http://www.w3.org/2000/svg">
+  <text x="160" y="15" fill="var(--accent)" font-size="12" font-weight="bold">三次卷积核 W(t) 的形状（a = -0.5）</text>
+  <line x1="40" y1="180" x2="480" y2="180" stroke="var(--ink)" stroke-width="1.5"/>
+  <line x1="260" y1="20" x2="260" y2="200" stroke="var(--ink)" stroke-width="1.5"/>
+  <text x="60" y="195" fill="var(--muted)" font-size="10">-2</text>
+  <text x="155" y="195" fill="var(--muted)" font-size="10">-1</text>
+  <text x="255" y="195" fill="var(--muted)" font-size="10">0</text>
+  <text x="350" y="195" fill="var(--muted)" font-size="10">1</text>
+  <text x="445" y="195" fill="var(--muted)" font-size="10">2</text>
+  <text x="485" y="178" fill="var(--muted)" font-size="10">t</text>
+  <text x="245" y="55" fill="var(--muted)" font-size="10">1.0</text>
+  <text x="245" y="120" fill="var(--muted)" font-size="10">0</text>
+  <text x="245" y="185" fill="var(--muted)" font-size="10">-0.1</text>
+  <path d="M 60 180 Q 100 180 130 175 Q 155 165 175 120 Q 200 60 260 55 Q 320 60 345 120 Q 365 165 390 175 Q 420 180 480 180" fill="none" stroke="var(--accent)" stroke-width="2.5"/>
+  <path d="M 130 180 L 130 175 Q 155 165 175 120 Q 200 60 260 55 Q 320 60 345 120 Q 365 165 390 175 L 390 180 Z" fill="var(--accent)" opacity="0.08"/>
+  <path d="M 60 180 Q 100 180 130 175 L 130 180 Z" fill="var(--accent2)" opacity="0.15"/>
+  <path d="M 390 175 Q 420 180 480 180 L 480 180 Z" fill="var(--accent2)" opacity="0.15"/>
+  <circle cx="260" cy="55" r="4" fill="var(--accent)"/>
+  <text x="268" y="50" fill="var(--accent)" font-size="10" font-weight="bold">W(0)=1</text>
+  <circle cx="350" cy="180" r="4" fill="var(--accent4)"/>
+  <text x="355" y="175" fill="var(--accent4)" font-size="10">W(1)=0</text>
+  <circle cx="175" cy="180" r="4" fill="var(--accent4)"/>
+  <text x="145" y="175" fill="var(--accent4)" font-size="10">W(-1)=0</text>
+  <text x="75" y="172" fill="var(--accent2)" font-size="9">负权重区</text>
+  <text x="420" y="172" fill="var(--accent2)" font-size="9">负权重区</text>
+  <line x1="175" y1="180" x2="175" y2="120" stroke="var(--rule)" stroke-dasharray="3,2"/>
+  <line x1="350" y1="180" x2="350" y2="120" stroke="var(--rule)" stroke-dasharray="3,2"/>
+</svg>
+<div class="caption">图2：三次卷积核 W(t) 的形状 — 注意 |t| > 1 区域的负权重，这正是它比双线性更锐利的原因</div>
 </div>
+
+<h3>2.3 为什么负权重能提升画质？</h3>
+
+<p>这是双三次插值最精妙的地方。双线性的权重都是正数（0到1），相当于对邻居做"加权平均"——<strong>永远是平滑的</strong>。而双三次核在 |t| > 1 的区域有<mark class="key">负权重</mark>，这意味着：</p>
+
+<ul>
+<li>当输出像素在两个源像素之间时，<strong>远处的像素会被减去</strong></li>
+<li>这会产生<strong>过冲（overshoot）</strong>效应：在边缘处，输出值可能超过源像素的最大值</li>
+<li>视觉效果：边缘变得更<strong>锐利</strong>，因为过冲增强了对比度</li>
+</ul>
+
+<p>用一句话总结：<mark class="key">负权重 = 锐化 = 边缘增强</mark>。这就是为什么双三次放大后比双线性看起来清晰得多。</p>
+
+<h3>2.4 手算示例：1D 双三次插值</h3>
+
+<p>假设一维信号 [10, 20, 200, 210]，要在 x=1.5 处插值（即第1个和第2个点之间的中点）。</p>
+
+<div class="formula">
+输入：f(0)=10, f(1)=20, f(2)=200, f(3)=210
+插值位置：x=1.5 → i=1, u=0.5
+
+计算 4 个权重（a=-0.5）：
+W(0.5)   = (a+2)(0.5)³ - (a+3)(0.5)² + 1 = 1.5×0.125 - 2.5×0.25 + 1 = 0.5625
+W(-0.5)  = W(0.5) = 0.5625  （偶函数）
+W(1.5)   = a(1.5)³ - 5a(1.5)² + 8a(1.5) - 4a = -0.5×3.375 + 2.5×2.25 - 4 + 2 = -0.0625
+W(-1.5)  = W(1.5) = -0.0625
+
+验证权重和 = 0.5625 + 0.5625 + (-0.0625) + (-0.0625) = 1.0 ✓
+
+加权求和：
+f(1.5) = W(-0.5)×f(0) + W(0.5)×f(1) + W(1.5)×f(2) + W(2.5)×f(3)
+       = (-0.0625)×10 + 0.5625×20 + 0.5625×200 + (-0.0625)×210
+       = -0.625 + 11.25 + 112.5 - 13.125 = <span class="result">110</span>
+
+对比双线性结果 = 0.5×20 + 0.5×200 = 110（此例恰好相同）
+但如果数据是 [10, 20, 200, 210]，双三次在 x=1.3 处会更锐利
+</div>
+
 <h3>2.5 2D 双三次插值：可分离性</h3>
-<p>先做 x 方向 4 次 1D 插值，再做 y 方向 1 次 1D 插值：<strong>8 个乘法器</strong>（对比非分离 16 个）。</p>
+
+<p>和双线性一样，2D 双三次利用<mark class="key">可分离性</mark>，先做 x 方向 4 次 1D 插值，再做 y 方向 1 次 1D 插值，避免直接做 16 项乘加。这在 FPGA 中可以节省乘法器。</p>
+
+<div class="diagram-box">
+<svg viewBox="0 0 520 260" xmlns="http://www.w3.org/2000/svg">
+  <text x="130" y="18" fill="var(--accent)" font-size="12" font-weight="bold">2D 双三次插值：可分离的两步法</text>
+  <text x="15" y="40" fill="var(--muted)" font-size="10">源图像 4×4</text>
+  <g transform="translate(15,45)">
+    <rect x="0" y="0" width="22" height="22" fill="rgb(180,180,180)" stroke="var(--rule)"/>
+    <rect x="22" y="0" width="22" height="22" fill="rgb(190,190,190)" stroke="var(--rule)"/>
+    <rect x="44" y="0" width="22" height="22" fill="rgb(200,200,200)" stroke="var(--rule)"/>
+    <rect x="66" y="0" width="22" height="22" fill="rgb(210,210,210)" stroke="var(--rule)"/>
+    <rect x="0" y="22" width="22" height="22" fill="rgb(160,160,160)" stroke="var(--rule)"/>
+    <rect x="22" y="22" width="22" height="22" fill="rgb(170,170,170)" stroke="var(--rule)"/>
+    <rect x="44" y="22" width="22" height="22" fill="rgb(180,180,180)" stroke="var(--rule)"/>
+    <rect x="66" y="22" width="22" height="22" fill="rgb(190,190,190)" stroke="var(--rule)"/>
+    <rect x="0" y="44" width="22" height="22" fill="rgb(100,100,100)" stroke="var(--rule)"/>
+    <rect x="22" y="44" width="22" height="22" fill="rgb(120,120,120)" stroke="var(--rule)"/>
+    <rect x="44" y="44" width="22" height="22" fill="rgb(140,140,140)" stroke="var(--rule)"/>
+    <rect x="66" y="44" width="22" height="22" fill="rgb(160,160,160)" stroke="var(--rule)"/>
+    <rect x="0" y="66" width="22" height="22" fill="rgb(80,80,80)" stroke="var(--rule)"/>
+    <rect x="22" y="66" width="22" height="22" fill="rgb(100,100,100)" stroke="var(--rule)"/>
+    <rect x="44" y="66" width="22" height="22" fill="rgb(120,120,120)" stroke="var(--rule)"/>
+    <rect x="66" y="66" width="22" height="22" fill="rgb(140,140,140)" stroke="var(--rule)"/>
+    <circle cx="55" cy="55" r="4" fill="var(--accent2)"/>
+    <text x="62" y="52" fill="var(--accent2)" font-size="9">插值点</text>
+  </g>
+  <line x1="120" y1="80" x2="170" y2="80" stroke="var(--accent)" stroke-width="2"/>
+  <polygon points="165,75 175,80 165,85" fill="var(--accent)"/>
+  <text x="125" y="72" fill="var(--accent)" font-size="9">Step 1: x方向</text>
+  <text x="125" y="96" fill="var(--muted)" font-size="9">每行4个像素→1个值</text>
+  <text x="185" y="40" fill="var(--muted)" font-size="10">x方向结果</text>
+  <g transform="translate(185,45)">
+    <rect x="0" y="0" width="50" height="22" fill="var(--bg3)" stroke="var(--accent)" stroke-width="1.5"/>
+    <text x="25" y="15" fill="var(--accent)" font-size="9" text-anchor="middle">R0</text>
+    <rect x="0" y="22" width="50" height="22" fill="var(--bg3)" stroke="var(--accent)" stroke-width="1.5"/>
+    <text x="25" y="37" fill="var(--accent)" font-size="9" text-anchor="middle">R1</text>
+    <rect x="0" y="44" width="50" height="22" fill="var(--bg3)" stroke="var(--accent)" stroke-width="1.5"/>
+    <text x="25" y="59" fill="var(--accent)" font-size="9" text-anchor="middle">R2</text>
+    <rect x="0" y="66" width="50" height="22" fill="var(--bg3)" stroke="var(--accent)" stroke-width="1.5"/>
+    <text x="25" y="81" fill="var(--accent)" font-size="9" text-anchor="middle">R3</text>
+  </g>
+  <line x1="255" y1="80" x2="305" y2="80" stroke="var(--accent)" stroke-width="2"/>
+  <polygon points="300,75 310,80 300,85" fill="var(--accent)"/>
+  <text x="260" y="72" fill="var(--accent)" font-size="9">Step 2: y方向</text>
+  <text x="260" y="96" fill="var(--muted)" font-size="9">4个值→1个输出</text>
+  <text x="320" y="40" fill="var(--muted)" font-size="10">最终输出</text>
+  <g transform="translate(325,55)">
+    <rect x="0" y="0" width="40" height="40" fill="rgb(150,150,150)" stroke="var(--accent2)" stroke-width="2"/>
+    <text x="20" y="25" fill="var(--accent2)" font-size="10" text-anchor="middle">OUT</text>
+  </g>
+  <text x="15" y="175" fill="var(--muted)" font-size="10">乘法器消耗：8个（4个x方向 + 4个y方向）</text>
+  <text x="15" y="192" fill="var(--muted)" font-size="10">对比直接16项乘加：16个乘法器</text>
+  <text x="15" y="209" fill="var(--muted)" font-size="10">对比双线性：4个乘法器（2+2）</text>
+  <g transform="translate(15,225)">
+    <rect x="0" y="0" width="40" height="20" fill="var(--accent3)"/>
+    <text x="20" y="14" fill="white" font-size="9" text-anchor="middle">双线性</text>
+    <rect x="50" y="0" width="80" height="20" fill="var(--accent)"/>
+    <text x="90" y="14" fill="white" font-size="9" text-anchor="middle">双三次(分离)</text>
+    <rect x="140" y="0" width="160" height="20" fill="var(--accent2)"/>
+    <text x="220" y="14" fill="white" font-size="9" text-anchor="middle">双三次(非分离)</text>
+  </g>
+</svg>
+<div class="caption">图3：利用可分离性，2D 双三次只需 8 个乘法器（x方向4个 + y方向4个），而非 16 个</div>
+</div>
+
 <!-- ============= 第3章 ============= -->
 <h2 id="s3">3. Lanczos 核原理与公式</h2>
-<p>理想插值核是 sinc 函数但无限长，Lanczos 用加窗截断逼近：</p>
+
+<h3>3.1 从双三次到 Lanczos：为什么要用 sinc 函数？</h3>
+
+<p>双三次用三次多项式近似理想插值核，而 Lanczos 直接用<mark class="key">sinc 函数加窗</mark>。从信号处理角度看，理想插值核就是 sinc 函数，但它无限长，无法实现。Lanczos 核通过加窗截断 sinc 函数，在有限长度内尽可能逼近理想频率响应<sup><a href="#cite-4">[4]</a></sup><sup><a href="#cite-5">[5]</a></sup>。</p>
+
+<h3>3.2 Lanczos 核定义</h3>
+
 <div class="formula">
 L(t) = sinc(t) × sinc(t/a)    若 -a < t < a
 L(t) = 0                        若 |t| ≥ a
-其中 sinc(t) = sin(πt) / (πt)，a = 2 或 3
 
-a = 2 → Lanczos-2：4 抽头（4×4 邻域）
-a = 3 → Lanczos-3：6 抽头（6×6 邻域）
+其中：
+    sinc(t) = sin(πt) / (πt)     （sinc函数，t=0时取1）
+    a = 窗口大小（正整数，通常取 2 或 3）
+
+a = 2 → Lanczos-2 核：4个抽头（-2到+2，去掉0点共4个非零点）
+a = 3 → Lanczos-3 核：6个抽头（-3到+3，去掉0点共6个非零点）
 </div>
+
+<div class="diagram-box">
+<svg viewBox="0 0 520 260" xmlns="http://www.w3.org/2000/svg">
+  <text x="80" y="18" fill="var(--accent)" font-size="12" font-weight="bold">三种插值核的形状对比</text>
+  <text x="15" y="40" fill="var(--accent)" font-size="10" font-weight="bold">双三次 (a=-0.5)</text>
+  <g transform="translate(15,45)">
+    <line x1="0" y1="40" x2="160" y2="40" stroke="var(--ink)" stroke-width="1"/>
+    <line x1="80" y1="5" x2="80" y2="75" stroke="var(--ink)" stroke-width="1"/>
+    <path d="M 0 40 Q 20 40 40 35 Q 55 25 70 15 Q 80 10 90 15 Q 105 25 120 35 Q 140 40 160 40" fill="none" stroke="var(--accent)" stroke-width="2"/>
+    <path d="M 0 40 Q 20 40 40 35 L 40 40 Z" fill="var(--accent2)" opacity="0.2"/>
+    <path d="M 120 35 Q 140 40 160 40 L 160 40 Z" fill="var(--accent2)" opacity="0.2"/>
+    <text x="145" y="55" fill="var(--muted)" font-size="8">|t|≤2</text>
+  </g>
+  <text x="190" y="40" fill="var(--accent3)" font-size="10" font-weight="bold">Lanczos-2 (a=2)</text>
+  <g transform="translate(190,45)">
+    <line x1="0" y1="40" x2="160" y2="40" stroke="var(--ink)" stroke-width="1"/>
+    <line x1="80" y1="5" x2="80" y2="75" stroke="var(--ink)" stroke-width="1"/>
+    <path d="M 0 40 Q 10 42 20 38 Q 30 30 40 22 Q 55 12 80 10 Q 105 12 120 22 Q 130 30 140 38 Q 150 42 160 40" fill="none" stroke="var(--accent3)" stroke-width="2"/>
+    <path d="M 0 40 Q 10 42 20 38 Q 30 30 40 22 Q 55 12 80 10 Q 105 12 120 22 Q 130 30 140 38 Q 150 42 160 40 Z" fill="var(--accent3)" opacity="0.08"/>
+    <text x="130" y="55" fill="var(--muted)" font-size="8">|t|≤2</text>
+  </g>
+  <text x="365" y="40" fill="var(--accent4)" font-size="10" font-weight="bold">Lanczos-3 (a=3)</text>
+  <g transform="translate(365,45)">
+    <line x1="0" y1="40" x2="150" y2="40" stroke="var(--ink)" stroke-width="1"/>
+    <line x1="75" y1="5" x2="75" y2="75" stroke="var(--ink)" stroke-width="1"/>
+    <path d="M 0 42 Q 5 44 10 40 Q 15 34 20 28 Q 30 18 45 12 Q 60 10 75 10 Q 90 10 105 12 Q 120 18 130 28 Q 135 34 140 40 Q 145 44 150 42" fill="none" stroke="var(--accent4)" stroke-width="2"/>
+    <path d="M 0 42 Q 5 44 10 40 Q 15 34 20 28 Q 30 18 45 12 Q 60 10 75 10 Q 90 10 105 12 Q 120 18 130 28 Q 135 34 140 40 Q 145 44 150 42 Z" fill="var(--accent4)" opacity="0.08"/>
+    <text x="115" y="55" fill="var(--muted)" font-size="8">|t|≤3</text>
+  </g>
+  <text x="15" y="145" fill="var(--ink)" font-size="11" font-weight="bold">关键区别：</text>
+  <text x="15" y="165" fill="var(--accent)" font-size="10">• 双三次：多项式近似，主瓣较宽，负瓣较小</text>
+  <text x="15" y="183" fill="var(--accent3)" font-size="10">• Lanczos-2：sinc加窗，主瓣更窄，负瓣更大 → 更锐利</text>
+  <text x="15" y="201" fill="var(--accent4)" font-size="10">• Lanczos-3：更宽的支撑域，更多旁瓣 → 最锐利但可能振铃</text>
+  <text x="15" y="219" fill="var(--muted)" font-size="10">注：实际sinc函数有多个过零点，图中为简化示意</text>
+</svg>
+<div class="caption">图4：三种插值核形状对比 — Lanczos 的主瓣更窄，负瓣更大，因此频率响应更好</div>
+</div>
+
 <h3>3.3 Lanczos-2 vs 双三次：同样 4×4，为什么 Lanczos 更好？</h3>
-<p>都用 4×4 邻域、3 个行缓存，区别在权重函数：Lanczos 主瓣更窄、负瓣更大（~-0.13 vs -0.0625）→ 频率响应更接近理想低通。<strong>同硬件代价下 Lanczos-2 画质更好</strong>。</p>
-<h3>3.4 FPGA 中如何实现 Lanczos 权重？</h3>
-<p>sinc 含除法和 sin，FPGA 不适合实时算——<mark class="key">预计算权重存入 LUT/ROM</mark>，小数部分 u（8bit，0~255）作地址，查 4 个抽头权重。</p>
-<!-- ============= 第4章 ============= -->
-<h2 id="s4">4. 双线性 vs 双三次 vs Lanczos 全面对比</h2>
+
+<p>这是最容易被搞混的点。Lanczos-2 和双三次<strong>都用 4×4 邻域</strong>，行缓存数都是 3。区别在于<mark class="key">权重函数不同</mark>：</p>
+
 <div class="table-wrap">
 <table>
-<tr><th>算法</th><th>平均 PSNR (dB)</th><th>行缓存</th></tr>
-<tr><td>双线性</td><td>30.88</td><td>1</td></tr>
-<tr><td>双三次</td><td>31.59</td><td>3</td></tr>
-<tr><td>Lanczos-2</td><td>~31.8</td><td>3</td></tr>
-<tr><td>Lanczos-3</td><td>~32.1</td><td>5</td></tr>
+<tr><th>特性</th><th>双三次 (a=-0.5)</th><th>Lanczos-2 (a=2)</th></tr>
+<tr><td>邻域大小</td><td>4×4 = 16</td><td>4×4 = 16</td></tr>
+<tr><td>行缓存数</td><td>3</td><td>3</td></tr>
+<tr><td>权重函数</td><td>三次多项式</td><td>sinc×sinc加窗</td></tr>
+<tr><td>主瓣宽度</td><td>较宽</td><td>较窄</td></tr>
+<tr><td>负瓣幅度</td><td>较小 (-0.0625)</td><td>较大 (~-0.13)</td></tr>
+<tr><td>锐利度</td><td>中等</td><td>更锐利</td></tr>
+<tr><td>振铃伪影</td><td>轻微</td><td>稍明显</td></tr>
+<tr><td>频率响应</td><td>较好</td><td>更好（更接近理想低通）</td></tr>
 </table>
 </div>
-<p>PSNR 提升约 0.7~1.2 dB。1920×1080 时行缓存：双线性 1920 像素，双三次 5760，Lanczos-3 9600。</p>
+
+<div class="note">
+<strong>结论</strong>：如果 FPGA 资源只允许 3 个行缓存（4×4 邻域），<strong>Lanczos-2 比双三次更好</strong>，因为同样硬件代价下频率响应更优。代价是权重计算需要 sinc 函数（通常用 LUT 预存）。
+</div>
+
+<h3>3.4 FPGA 中如何实现 Lanczos 权重？</h3>
+
+<p>Lanczos 核包含 sinc 函数，实时计算需要除法和 sin 运算，FPGA 不适合。标准做法是<mark class="key">预计算权重存入 LUT/ROM</mark>：</p>
+
+<ol>
+<li>将小数部分 u（如 8 位精度，0~255）作为地址</li>
+<li>预先离线计算 L(u-2), L(u-1), L(u), L(u+1) 四个权重值</li>
+<li>存入 ROM，运行时查表即可</li>
+</ol>
+
+<div class="formula">
+// 离线预计算 Lanczos-2 权重 LUT（Python/MATLAB）
+import numpy as np
+a = 2
+for u_int in range(256):
+    u = u_int / 256.0  # 还原为 0~1 小数
+    for k in range(-1, 3):  # 4个抽头
+        t = u + k  # 偏移量
+        if abs(t) < a:
+            w = np.sinc(t) * np.sinc(t/a)  # sinc(x)=sin(πx)/(πx)
+        else:
+            w = 0.0
+        # 存入 ROM: weight_LUT[u_int][k+1] = fixed_point(w)
+</div>
+
+<!-- ============= 第4章 ============= -->
+<h2 id="s4">4. 双线性 vs 双三次 vs Lanczos 全面对比</h2>
+
+<h3>4.1 画质对比</h3>
+
+<p>根据学术研究数据，三种算法的 PSNR（峰值信噪比，越高越好）对比如下<sup><a href="#cite-6">[6]</a></sup>：</p>
+
+<div class="table-wrap">
+<table>
+<tr><th>算法</th><th>平均 PSNR (dB)</th><th>最佳 PSNR (dB)</th><th>最差 PSNR (dB)</th><th>行缓存</th></tr>
+<tr><td>双线性</td><td>30.88</td><td>35.08</td><td>23.15</td><td>1</td></tr>
+<tr><td>双三次</td><td>31.59</td><td>36.00</td><td>23.66</td><td>3</td></tr>
+<tr><td>Lanczos-2</td><td>~31.8</td><td>~36.3</td><td>~23.9</td><td>3</td></tr>
+<tr><td>Lanczos-3</td><td>~32.1</td><td>~36.6</td><td>~24.1</td><td>5</td></tr>
+</table>
+</div>
+
+<p>PSNR 提升约 0.7~1.2 dB，视觉上体现为更锐利的边缘和更少的模糊。</p>
+
+<h3>4.2 FPGA 资源对比</h3>
+
+<div class="table-wrap">
+<table>
+<tr><th>指标</th><th>双线性</th><th>双三次</th><th>Lanczos-2</th><th>Lanczos-3</th></tr>
+<tr><td>邻域大小</td><td>2×2</td><td>4×4</td><td>4×4</td><td>6×6</td></tr>
+<tr><td>行缓存数</td><td>1</td><td>3</td><td>3</td><td>5</td></tr>
+<tr><td>行缓存深度</td><td>W</td><td>3W</td><td>3W</td><td>5W</td></tr>
+<tr><td>乘法器(可分离)</td><td>4</td><td>8</td><td>8</td><td>12</td></tr>
+<tr><td>乘法器(非分离)</td><td>4</td><td>16</td><td>16</td><td>36</td></tr>
+<tr><td>权重计算</td><td>实时(简单)</td><td>实时/LUT</td><td>LUT</td><td>LUT</td></tr>
+<tr><td>典型FMAX</td><td>300+ MHz</td><td>~200 MHz</td><td>~200 MHz</td><td>~165 MHz</td></tr>
+<tr><td>1080p@60Hz</td><td>轻松</td><td>可以</td><td>可以</td><td>需要优化</td></tr>
+</table>
+</div>
+
+<p>以 1920×1080 输入为例，行缓存深度 = 1920：</p>
+<ul>
+<li>双线性：1 × 1920 = 1920 像素的 RAM</li>
+<li>双三次/Lanczos-2：3 × 1920 = 5760 像素的 RAM</li>
+<li>Lanczos-3：5 × 1920 = 9600 像素的 RAM</li>
+</ul>
+
+<h3>4.3 什么时候用什么？</h3>
+
 <div class="table-wrap">
 <table>
 <tr><th>场景</th><th>推荐算法</th><th>理由</th></tr>
 <tr><td>实时视频缩放（消费级）</td><td>双线性</td><td>资源少、FMAX高、够用</td></tr>
 <tr><td>医疗/工业图像</td><td>双三次</td><td>需要清晰边缘，资源可接受</td></tr>
 <tr><td>高端视频处理器</td><td>Lanczos-2</td><td>同资源下画质最好</td></tr>
-<tr><td>专业广播/电影</td><td>Lanczos-3</td><td>追求最高画质</td></tr>
-<tr><td>FPGA 面试</td><td>双三次</td><td>考察 4×4 窗口 + 权重 + 行缓存</td></tr>
+<tr><td>专业广播/电影</td><td>Lanczos-3</td><td>追求最高画质，资源不是问题</td></tr>
+<tr><td>FPGA 面试</td><td>双三次</td><td>考察 4×4 窗口 + 权重计算 + 行缓存</td></tr>
 </table>
 </div>
+
 <!-- ============= 第5章 ============= -->
 <h2 id="s5">5. FPGA 架构：4 行缓存 + 4 抽头设计</h2>
+
 <h3>5.1 整体架构</h3>
-<p>与双线性架构相似，主要区别：<mark class="key">行缓存 1→3 个</mark>（加当前行共 4 行），窗口 2×2→4×4，权重实时计算→LUT 查表。</p>
+
+<p>双三次/Lanczos-2 的 FPGA 实现与双线性的架构非常相似，主要区别是<mark class="key">行缓存从 1 个增加到 3 个</mark>（加上当前行共 4 行），窗口从 2×2 扩大到 4×4<sup><a href="#cite-1">[1]</a></sup><sup><a href="#cite-3">[3]</a></sup>。</p>
+
+<div class="diagram-box">
+<svg viewBox="0 0 540 330" xmlns="http://www.w3.org/2000/svg">
+  <text x="120" y="18" fill="var(--accent)" font-size="12" font-weight="bold">双三次/Lanczos-2 FPGA 架构总览</text>
+  <rect x="10" y="40" width="80" height="30" fill="var(--bg3)" stroke="var(--ink)" rx="4"/>
+  <text x="50" y="59" fill="var(--ink)" font-size="10" text-anchor="middle">输入像素流</text>
+  <line x1="90" y1="55" x2="120" y2="55" stroke="var(--ink)" stroke-width="1.5"/>
+  <polygon points="115,52 122,55 115,58" fill="var(--ink)"/>
+  <text x="135" y="35" fill="var(--accent)" font-size="10" font-weight="bold">3个行缓存 + 当前行</text>
+  <g transform="translate(120,40)">
+    <rect x="0" y="0" width="100" height="22" fill="#dbeafe" stroke="var(--accent)" rx="3"/>
+    <text x="50" y="15" fill="var(--accent)" font-size="9" text-anchor="middle">Line Buffer 0</text>
+    <rect x="0" y="24" width="100" height="22" fill="#dbeafe" stroke="var(--accent)" rx="3"/>
+    <text x="50" y="39" fill="var(--accent)" font-size="9" text-anchor="middle">Line Buffer 1</text>
+    <rect x="0" y="48" width="100" height="22" fill="#dbeafe" stroke="var(--accent)" rx="3"/>
+    <text x="50" y="63" fill="var(--accent)" font-size="9" text-anchor="middle">Line Buffer 2</text>
+    <rect x="0" y="72" width="100" height="22" fill="#fef3c7" stroke="var(--accent4)" rx="3"/>
+    <text x="50" y="87" fill="var(--accent4)" font-size="9" text-anchor="middle">当前行(直接输入)</text>
+  </g>
+  <line x1="225" y1="85" x2="255" y2="85" stroke="var(--ink)" stroke-width="1.5"/>
+  <polygon points="250,82 257,85 250,88" fill="var(--ink)"/>
+  <text x="270" y="35" fill="var(--accent)" font-size="10" font-weight="bold">4×4 窗口寄存器</text>
+  <g transform="translate(265,40)">
+    <rect x="0" y="0" width="20" height="20" fill="var(--bg3)" stroke="var(--rule)"/>
+    <rect x="20" y="0" width="20" height="20" fill="var(--bg3)" stroke="var(--rule)"/>
+    <rect x="40" y="0" width="20" height="20" fill="var(--bg3)" stroke="var(--rule)"/>
+    <rect x="60" y="0" width="20" height="20" fill="var(--bg3)" stroke="var(--rule)"/>
+    <rect x="0" y="20" width="20" height="20" fill="var(--bg3)" stroke="var(--rule)"/>
+    <rect x="20" y="20" width="20" height="20" fill="var(--bg3)" stroke="var(--rule)"/>
+    <rect x="40" y="20" width="20" height="20" fill="var(--bg3)" stroke="var(--rule)"/>
+    <rect x="60" y="20" width="20" height="20" fill="var(--bg3)" stroke="var(--rule)"/>
+    <rect x="0" y="40" width="20" height="20" fill="var(--bg3)" stroke="var(--rule)"/>
+    <rect x="20" y="40" width="20" height="20" fill="var(--bg3)" stroke="var(--rule)"/>
+    <rect x="40" y="40" width="20" height="20" fill="var(--bg3)" stroke="var(--rule)"/>
+    <rect x="60" y="40" width="20" height="20" fill="var(--bg3)" stroke="var(--rule)"/>
+    <rect x="0" y="60" width="20" height="20" fill="var(--bg3)" stroke="var(--rule)"/>
+    <rect x="20" y="60" width="20" height="20" fill="var(--bg3)" stroke="var(--rule)"/>
+    <rect x="40" y="60" width="20" height="20" fill="var(--bg3)" stroke="var(--rule)"/>
+    <rect x="60" y="60" width="20" height="20" fill="var(--bg3)" stroke="var(--rule)"/>
+    <text x="80" y="50" fill="var(--muted)" font-size="8">移位</text>
+    <text x="80" y="60" fill="var(--muted)" font-size="8">寄存器</text>
+  </g>
+  <line x1="350" y1="85" x2="380" y2="85" stroke="var(--ink)" stroke-width="1.5"/>
+  <polygon points="375,82 382,85 375,88" fill="var(--ink)"/>
+  <rect x="380" y="40" width="140" height="45" fill="#dbeafe" stroke="var(--accent)" rx="4"/>
+  <text x="450" y="57" fill="var(--accent)" font-size="10" text-anchor="middle" font-weight="bold">坐标计算 + 权重LUT</text>
+  <text x="450" y="72" fill="var(--muted)" font-size="8" text-anchor="middle">u,v → 16个权重系数</text>
+  <line x1="450" y1="90" x2="450" y2="120" stroke="var(--ink)" stroke-width="1.5"/>
+  <polygon points="447,115 450,122 453,115" fill="var(--ink)"/>
+  <line x1="345" y1="105" x2="345" y2="120" stroke="var(--ink)" stroke-width="1.5"/>
+  <polygon points="342,115 345,122 348,115" fill="var(--ink)"/>
+  <rect x="270" y="125" width="250" height="50" fill="#d1fae5" stroke="var(--accent3)" rx="4"/>
+  <text x="395" y="145" fill="var(--accent3)" font-size="11" text-anchor="middle" font-weight="bold">MAC 单元（乘加树）</text>
+  <text x="395" y="162" fill="var(--muted)" font-size="8" text-anchor="middle">16路并行乘法 → 加法树 → 饱和截断</text>
+  <line x1="395" y1="180" x2="395" y2="205" stroke="var(--ink)" stroke-width="1.5"/>
+  <polygon points="392,200 395,207 398,200" fill="var(--ink)"/>
+  <rect x="340" y="210" width="110" height="30" fill="var(--bg3)" stroke="var(--ink)" rx="4"/>
+  <text x="395" y="229" fill="var(--ink)" font-size="10" text-anchor="middle">输出像素</text>
+  <text x="10" y="270" fill="var(--accent)" font-size="10" font-weight="bold">与双线性对比：</text>
+  <text x="10" y="288" fill="var(--ink)" font-size="10">• 行缓存：1个 → 3个（+2个BRAM）</text>
+  <text x="10" y="304" fill="var(--ink)" font-size="10">• 窗口：2×2 → 4×4（寄存器×4）</text>
+  <text x="200" y="288" fill="var(--ink)" font-size="10">• 乘法器：4个 → 8个（可分离）</text>
+  <text x="200" y="304" fill="var(--ink)" font-size="10">• 权重：实时计算 → LUT查表</text>
+</svg>
+<div class="caption">图5：双三次/Lanczos-2 的 FPGA 架构 — 与双线性相比，主要是行缓存和窗口扩大</div>
+</div>
+
 <h3>5.2 行缓存设计详解</h3>
-<p>需要 4 行同时可见 → <strong>3 个行缓存</strong>。有的设计用 <strong>5 个</strong>（如 axi4s-bicubic-upscaler）：第 5 个用于写下一行时避免与读 4 行冲突，保持 1 pixel/clock 吞吐。行尾指针轮换，无需数据搬移。资源：3 × W × 8bit。</p>
+
+<p>双三次需要 4 行像素同时可见（当前行 + 前 3 行），所以需要 <strong>3 个行缓存</strong>。但有些设计（如 axi4s-bicubic-upscaler）使用 <strong>5 个行缓存</strong>，原因是第 5 个用于<mark class="key">写下一行的同时读取当前 4 行</mark>，避免读写冲突<sup><a href="#cite-1">[1]</a></sup>。</p>
+
+<div class="diagram-box">
+<svg viewBox="0 0 540 200" xmlns="http://www.w3.org/2000/svg">
+  <text x="100" y="18" fill="var(--accent)" font-size="12" font-weight="bold">行缓存工作原理（3+1方案）</text>
+  <text x="10" y="45" fill="var(--accent4)" font-size="10" font-weight="bold">写入→</text>
+  <g transform="translate(55,30)">
+    <rect x="0" y="0" width="120" height="25" fill="#fef3c7" stroke="var(--accent4)" stroke-width="1.5" rx="3"/>
+    <text x="60" y="17" fill="var(--accent4)" font-size="9" text-anchor="middle">当前行 (Row N)</text>
+    <rect x="0" y="30" width="120" height="25" fill="#dbeafe" stroke="var(--accent)" stroke-width="1.5" rx="3"/>
+    <text x="60" y="47" fill="var(--accent)" font-size="9" text-anchor="middle">Line Buf 0 (Row N-1)</text>
+    <rect x="0" y="60" width="120" height="25" fill="#dbeafe" stroke="var(--accent)" stroke-width="1.5" rx="3"/>
+    <text x="60" y="77" fill="var(--accent)" font-size="9" text-anchor="middle">Line Buf 1 (Row N-2)</text>
+    <rect x="0" y="90" width="120" height="25" fill="#dbeafe" stroke="var(--accent)" stroke-width="1.5" rx="3"/>
+    <text x="60" y="107" fill="var(--accent)" font-size="9" text-anchor="middle">Line Buf 2 (Row N-3)</text>
+  </g>
+  <line x1="180" y1="42" x2="220" y2="42" stroke="var(--accent3)" stroke-width="1.5"/>
+  <polygon points="215,39 222,42 215,45" fill="var(--accent3)"/>
+  <line x1="180" y1="72" x2="220" y2="72" stroke="var(--accent3)" stroke-width="1.5"/>
+  <polygon points="215,69 222,72 215,75" fill="var(--accent3)"/>
+  <line x1="180" y1="102" x2="220" y2="102" stroke="var(--accent3)" stroke-width="1.5"/>
+  <polygon points="215,99 222,102 215,105" fill="var(--accent3)"/>
+  <line x1="180" y1="132" x2="220" y2="132" stroke="var(--accent3)" stroke-width="1.5"/>
+  <polygon points="215,129 222,132 215,135" fill="var(--accent3)"/>
+  <text x="185" y="28" fill="var(--accent3)" font-size="9" font-weight="bold">读出→</text>
+  <text x="230" y="28" fill="var(--accent)" font-size="10" font-weight="bold">4×4 窗口</text>
+  <g transform="translate(230,35)">
+    <rect x="0" y="0" width="18" height="18" fill="var(--bg3)" stroke="var(--accent)"/>
+    <rect x="18" y="0" width="18" height="18" fill="var(--bg3)" stroke="var(--accent)"/>
+    <rect x="36" y="0" width="18" height="18" fill="var(--bg3)" stroke="var(--accent)"/>
+    <rect x="54" y="0" width="18" height="18" fill="var(--bg3)" stroke="var(--accent)"/>
+    <text x="36" y="-5" fill="var(--muted)" font-size="8" text-anchor="middle">Row N</text>
+    <rect x="0" y="24" width="18" height="18" fill="var(--bg3)" stroke="var(--accent)"/>
+    <rect x="18" y="24" width="18" height="18" fill="var(--bg3)" stroke="var(--accent)"/>
+    <rect x="36" y="24" width="18" height="18" fill="var(--bg3)" stroke="var(--accent)"/>
+    <rect x="54" y="24" width="18" height="18" fill="var(--bg3)" stroke="var(--accent)"/>
+    <rect x="0" y="48" width="18" height="18" fill="var(--bg3)" stroke="var(--accent)"/>
+    <rect x="18" y="48" width="18" height="18" fill="var(--bg3)" stroke="var(--accent)"/>
+    <rect x="36" y="48" width="18" height="18" fill="var(--bg3)" stroke="var(--accent)"/>
+    <rect x="54" y="48" width="18" height="18" fill="var(--bg3)" stroke="var(--accent)"/>
+    <rect x="0" y="72" width="18" height="18" fill="var(--bg3)" stroke="var(--accent)"/>
+    <rect x="18" y="72" width="18" height="18" fill="var(--bg3)" stroke="var(--accent)"/>
+    <rect x="36" y="72" width="18" height="18" fill="var(--bg3)" stroke="var(--accent)"/>
+    <rect x="54" y="72" width="18" height="18" fill="var(--bg3)" stroke="var(--accent)"/>
+  </g>
+  <text x="340" y="50" fill="var(--ink)" font-size="10" font-weight="bold">行缓存轮换：</text>
+  <text x="340" y="68" fill="var(--muted)" font-size="9">处理完一行后：</text>
+  <text x="340" y="83" fill="var(--accent4)" font-size="9">→ 当前行变成 Line Buf 0</text>
+  <text x="340" y="98" fill="var(--accent)" font-size="9">→ Line Buf 0 → Line Buf 1</text>
+  <text x="340" y="113" fill="var(--accent)" font-size="9">→ Line Buf 1 → Line Buf 2</text>
+  <text x="340" y="128" fill="var(--accent)" font-size="9">→ Line Buf 2 被覆盖（最旧行）</text>
+  <text x="340" y="148" fill="var(--muted)" font-size="9">无需数据拷贝，只切换指针</text>
+  <text x="340" y="170" fill="var(--accent3)" font-size="10" font-weight="bold">资源：3 × W × B bits</text>
+  <text x="340" y="185" fill="var(--muted)" font-size="9">W=1920, B=8bit → 3×1920×8 = 46080 bits</text>
+</svg>
+<div class="caption">图6：行缓存工作原理 — 4行同时读取，行尾时指针轮换，无需数据搬移</div>
+</div>
+
 <h3>5.3 权重 LUT 设计</h3>
-<p>双三次权重可实时算（多项式）；Lanczos 必须 LUT：<code>rom[0:3][0:255]</code>，4×256×16bit = 16Kb，查表 1 拍。</p>
+
+<p>对于双三次，权重可以实时计算（三次多项式只需要乘法和加法）。但对于 Lanczos，sinc 函数无法实时计算，必须用 LUT 预存<sup><a href="#cite-1">[1]</a></sup>。</p>
+
+<div class="formula">
+// Verilog 伪代码：Lanczos-2 权重 LUT
+module lanczos_weight_lut #(
+    parameter FRAC_BITS = 8,   // 小数精度
+    parameter WEIGHT_BITS = 16  // 权重定点位宽(Q1.15有符号)
+) (
+    input  [FRAC_BITS-1:0]  frac,     // u 或 v 的小数部分 (0~255)
+    output [WEIGHT_BITS-1:0] w0,       // W(t-2) 或 W(u-1)
+    output [WEIGHT_BITS-1:0] w1,       // W(t-1) 或 W(u)
+    output [WEIGHT_BITS-1:0] w2,       // W(t)   或 W(u+1) → 主权重
+    output [WEIGHT_BITS-1:0] w3        // W(t+1) 或 W(u+2)
+);
+    // ROM: 256 entries × 4 weights × 16 bits
+    // 预计算: w = round(sinc(t) * sinc(t/2) * 32768)
+    reg signed [WEIGHT_BITS-1:0] rom [0:3][0:255];
+    // 初始化略（由 Python/MATLAB 离线生成）
+    
+    assign w0 = rom[0][frac];
+    assign w1 = rom[1][frac];
+    assign w2 = rom[2][frac];
+    assign w3 = rom[3][frac];
+endmodule
+</div>
+
 <h3>5.4 MAC 单元设计（可分离方案）</h3>
-<p>Stage1 x 方向 4 行各做 1D 插值（4 乘法器 + 加法树），Stage2 y 方向 1 次（4 乘法器）→ 总计 <strong>8 个乘法器</strong>，4+4 级流水。</p>
+
+<p>利用可分离性，2D 插值分两步：先 x 方向 4 次乘加，再 y 方向 1 次乘加。共需要 <strong>8 个乘法器</strong>。</p>
+
+<div class="formula">
+// Stage 1: x方向 — 对4行各做1D插值（4个并行MAC）
+// 每行取4个像素 × 4个x权重 → 1个中间值
+for (row = 0; row < 4; row++) {
+    temp[row] = p[row][0]*wx[0] + p[row][1]*wx[1] 
+             + p[row][2]*wx[2] + p[row][3]*wx[3];
+    // 需要4个乘法器 + 3级加法树
+}
+
+// Stage 2: y方向 — 对4个中间值做1D插值
+output = temp[0]*wy[0] + temp[1]*wy[1] 
+       + temp[2]*wy[2] + temp[3]*wy[3];
+// 需要4个乘法器 + 3级加法树
+
+// 总计：8个乘法器，4+4级流水线
+</div>
+
 <h3>5.5 资源估算实例（1920×1080 输入）</h3>
+
 <div class="table-wrap">
 <table>
 <tr><th>资源</th><th>双线性</th><th>双三次/Lanczos-2</th><th>增幅</th></tr>
-<tr><td>行缓存 BRAM</td><td>15Kb</td><td>46Kb</td><td>×3</td></tr>
-<tr><td>窗口寄存器</td><td>32bit</td><td>128bit</td><td>×4</td></tr>
+<tr><td>行缓存 BRAM</td><td>1 × 1920 × 8bit = 15Kb</td><td>3 × 1920 × 8bit = 46Kb</td><td>×3</td></tr>
+<tr><td>窗口寄存器</td><td>4 × 8bit = 32bit</td><td>16 × 8bit = 128bit</td><td>×4</td></tr>
 <tr><td>乘法器(DSP48)</td><td>4</td><td>8</td><td>×2</td></tr>
-<tr><td>权重LUT</td><td>不需要</td><td>16Kb</td><td>新增</td></tr>
+<tr><td>权重LUT</td><td>不需要(实时计算)</td><td>4×256×16bit = 16Kb</td><td>新增</td></tr>
+<tr><td>流水线级数</td><td>4-6</td><td>8-12</td><td>×2</td></tr>
 </table>
 </div>
+
 <div class="note">
-<strong>实际案例</strong>：axi4s-bicubic-upscaler 在 ZCU102 综合 300MHz、45373 LUT、27.5 BRAM，320×180→1280×720 4×放大，254fps。
+<strong>实际案例参考</strong>：axi4s-bicubic-upscaler 项目在 ZCU102 (Zynq UltraScale+) 上综合结果为 300MHz、45373 LUT (16.55%)、27.5 BRAM (3.02%)，实现了 320×180 → 1280×720 的 4× 放大，吞吐量 254fps<sup><a href="#cite-1">[1]</a></sup>。
 </div>
+
 <!-- ============= 第6章 ============= -->
 <h2 id="s6">6. 参考开源项目与面试要点</h2>
+
+<h3>6.1 推荐开源项目</h3>
+
 <div class="table-wrap">
 <table>
-<tr><th>项目</th><th>特点</th><th>许可</th></tr>
-<tr><td><a href="https://github.com/youngyang00/axi4s-bicubic-upscaler">axi4s-bicubic-upscaler</a></td><td>AXI4-Stream, 300MHz, 16并行BCU, 不用DSP</td><td>MIT</td></tr>
-<tr><td><a href="https://github.com/flyaudio/FPGA-Bicubic-interpolation">FPGA-Bicubic-interpolation</a></td><td>165MHz, DDR3, 1080p→1600×1200</td><td>GPL-3.0</td></tr>
+<tr><th>项目</th><th>平台</th><th>特点</th><th>许可</th></tr>
+<tr><td><a href="https://github.com/youngyang00/axi4s-bicubic-upscaler">axi4s-bicubic-upscaler</a></td><td>Zynq UltraScale+</td><td>AXI4-Stream, 300MHz, 16并行BCU, 不用DSP</td><td>MIT</td></tr>
+<tr><td><a href="https://github.com/flyaudio/FPGA-Bicubic-interpolation">FPGA-Bicubic-interpolation</a></td><td>Altera EP4CE55 / Xilinx xc7a100t</td><td>165MHz, DDR3, 1080p→1600×1200</td><td>GPL-3.0</td></tr>
+<tr><td><a href="https://blog.csdn.net/botao_li/article/details/101668760">CSDN: botao_li</a></td><td>Sysgen + Verilog</td><td>4×4窗口, 双线性+双立方对比, 实机验证</td><td>博客</td></tr>
+<tr><td><a href="https://arxiv.org/pdf/2009.09622v1">arxiv: Low-Cost Bicubic</a></td><td>学术论文</td><td>低资源实现, 滑动窗口架构图, PSNR对比</td><td>论文</td></tr>
 </table>
 </div>
+
 <h3>6.2 FPGA 面试要点</h3>
-<h4>Q1: 双三次和双线性的核心区别？</h4>
-<p><strong>A:</strong> 邻域 2×2→4×4，权重函数线性→三次多项式，关键是<mark class="key">负权重</mark>产生过冲使边缘锐利。代价：行缓存 1→3，乘法器 4→8（可分离）。</p>
-<h4>Q2: 为什么 Lanczos-2 和双三次同用 4×4，Lanczos 更好？</h4>
-<p><strong>A:</strong> 权重函数不同：Lanczos 用 sinc×sinc 加窗，频率响应更接近理想低通，主瓣更窄、负瓣更大。</p>
-<h4>Q3: 行缓存为什么用 RAM 不用寄存器？</h4>
-<p><strong>A:</strong> 一行 1920×8bit = 15360bit，寄存器爆逻辑；BRAM 1 块 18Kb 够用，还有双端口。</p>
+
+<h4>Q1: 双三次和双线性的核心区别是什么？</h4>
+<p><strong>A:</strong> 邻域从 2×2 扩展到 4×4，权重函数从线性变为三次多项式。最关键的是双三次有<mark class="key">负权重</mark>，能产生过冲效应使边缘更锐利。代价是行缓存从 1 个增加到 3 个，乘法器从 4 个增加到 8 个（可分离方案）。</p>
+
+<h4>Q2: 为什么 Lanczos-2 和双三次用同样的 4×4 邻域，但 Lanczos 效果更好？</h4>
+<p><strong>A:</strong> 因为权重函数不同。双三次用三次多项式近似理想插值核，而 Lanczos 直接用 sinc×sinc 加窗，频率响应更接近理想低通滤波器。具体体现为 Lanczos 的主瓣更窄、负瓣更大，边缘锐化效果更强。</p>
+
+<h4>Q3: 行缓存为什么用 RAM 而不用寄存器？</h4>
+<p><strong>A:</strong> 1080p 图像一行有 1920 个像素，每个 8bit，一行数据量 = 1920×8 = 15360bit。用寄存器实现会消耗大量逻辑资源。用 BRAM 只需 1 块（18Kb BRAM 足够存一行），而且 BRAM 有双端口读写能力，适合行缓存场景。</p>
+
 <h4>Q4: 可分离性如何节省乘法器？</h4>
-<p><strong>A:</strong> 非分离 16 个乘法器；先 x 后 y 分离后流水线复用，只需 4+4=8 个。</p>
-<h4>Q5: Lanczos 权重为什么用 LUT？</h4>
-<p><strong>A:</strong> sinc 含 sin 和除法，FPGA 不擅长；权重只依赖小数部分（256 种），预存 256×4 权重查表 1 拍。</p>
-<h4>Q6: 什么是振铃伪影？</h4>
-<p><strong>A:</strong> 负瓣大 → 边缘过冲 → 波纹/光晕；Lanczos-3 比 -2 明显，双三次较轻；clamp 0~255 防溢出。</p>
-<h4>Q7: 5 个行缓存 vs 3 个？</h4>
-<p><strong>A:</strong> 理论 3+当前行够；5 个是写下一行不干扰读 4 行，保持 1 pixel/clock，多花 1 块 BRAM。</p>
+<p><strong>A:</strong> 2D 插值的直接实现需要 16 个乘法器（16 个像素 × 16 个权重）。利用可分离性，先 x 方向做 4 次 1D 插值（4×4=16 个乘法 → 但每行共享 4 个权重，所以只需 4 个乘法器×4行 = 16个），再 y 方向做 1 次（4 个乘法器）。但如果用流水线复用，可以将 x 方向的 4 行串行处理，只需 4+4=8 个乘法器。</p>
+
+<h4>Q5: Lanczos 权重为什么用 LUT 而不实时计算？</h4>
+<p><strong>A:</strong> Lanczos 核包含 sinc 函数 = sin(πt)/(πt)，需要 sin 运算和除法，FPGA 不擅长。而且权重只取决于小数部分 u（8位 = 256 种可能），预计算 256×4 = 1024 个权重存入 ROM 即可，查表只需 1 个时钟周期。</p>
+
+<h4>Q6: 什么是振铃伪影（ringing artifact）？</h4>
+<p><strong>A:</strong> Lanczos 的负瓣较大，在边缘处会产生过冲——输出值超过源像素的最大值或低于最小值。视觉上表现为边缘两侧的"波纹"或"光晕"。Lanczos-3 比 Lanczos-2 更明显。双三次因为负瓣较小，振铃也较轻。可以通过 clamp（饱和限幅）到 0~255 来防止溢出。</p>
+
+<h4>Q7: 5 个行缓存 vs 3 个行缓存的区别？</h4>
+<p><strong>A:</strong> 双三次需要读 4 行数据，理论上 3 个行缓存（+当前行）就够了。但有些设计（如 axi4s-bicubic-upscaler）用 5 个行缓存，第 5 个用于<mark class="key">写下一行的同时不受读取干扰</mark>，避免读写冲突，保持 1 pixel/clock 的吞吐量。代价是多用 1 块 BRAM。</p>
+
+<h3>6.3 学习建议</h3>
+
+<ol>
+<li><strong>先理解双三次的权重公式</strong>：手算 a=-0.5 时的 W(0), W(0.5), W(1), W(1.5) 值</li>
+<li><strong>画 4×4 窗口的数据流</strong>：理解行缓存如何并行提供 16 个像素</li>
+<li><strong>对比双线性代码</strong>：你已有的 bilinear_calculate.v 只需把 2×2 改为 4×4，权重计算改为 LUT 查表</li>
+<li><strong>阅读 axi4s-bicubic-upscaler 源码</strong>：重点关注 imageRearranger_clamp.v（行缓存管理）和 BCU_array（MAC 单元）</li>
+<li><strong>面试准备</strong>：能画出 4 行缓存 + 4×4 窗口 + MAC 的架构图，说清楚负权重的作用</li>
+</ol>
+
 <footer>
 <div class="sources">
 <h2>Sources</h2>
 <ol>
-<li id="cite-1">youngyang00, AXI4S Bicubic Interpolation IP. <a class="src-url" href="https://github.com/youngyang00/axi4s-bicubic-upscaler">axi4s-bicubic-upscaler</a></li>
-<li id="cite-2">botao_li, FPGA图像处理13_常用算法_图像放大. <a class="src-url" href="https://blog.csdn.net/botao_li/article/details/101668760">CSDN</a></li>
-<li id="cite-3">flyaudio, FPGA-Bicubic-interpolation. <a class="src-url" href="https://github.com/flyaudio/FPGA-Bicubic-interpolation">GitHub</a></li>
-<li id="cite-4">HandWiki, Lanczos Resampling. <a class="src-url" href="https://handwiki.org/wiki/Lanczos_resampling">handwiki</a></li>
-<li id="cite-5">jeffboody, Lanczos Resampling. <a class="src-url" href="https://github.com/jeffboody/Lanczos">GitHub</a></li>
-<li id="cite-6">电子与信息学报, 自适应图像插值算法及加速引擎协同设计. <a class="src-url" href="https://jeit.ac.cn/cn/article/doi/10.11999/JEIT221503?viewType=HTML">jeit</a></li>
+<li id="cite-1">
+<span class="src-title">youngyang00, AXI4S Bicubic Interpolation IP. MIT许可, 300MHz ZCU102, 16并行BCU, LUT乘法器无DSP.</span>
+<a class="src-url" href="https://github.com/youngyang00/axi4s-bicubic-upscaler" target="_blank" rel="noopener">https://github.com/youngyang00/axi4s-bicubic-upscaler</a>
+</li>
+<li id="cite-2">
+<span class="src-title">botao_li, FPGA图像处理13_常用算法_图像放大. CSDN博客, 双线性+双立方对比, sysgen+Verilog实现.</span>
+<a class="src-url" href="https://blog.csdn.net/botao_li/article/details/101668760" target="_blank" rel="noopener">https://blog.csdn.net/botao_li/article/details/101668760</a>
+</li>
+<li id="cite-3">
+<span class="src-title">flyaudio, FPGA-Bicubic-interpolation. GPL-3.0, Altera EP4CE55+Xilinx xc7a100t, 165MHz, DDR3.</span>
+<a class="src-url" href="https://github.com/flyaudio/FPGA-Bicubic-interpolation" target="_blank" rel="noopener">https://github.com/flyaudio/FPGA-Bicubic-interpolation</a>
+</li>
+<li id="cite-4">
+<span class="src-title">HandWiki, Lanczos Resampling. Lanczos核定义、sinc函数、a=2/a=3参数说明.</span>
+<a class="src-url" href="https://handwiki.org/wiki/Lanczos_resampling" target="_blank" rel="noopener">https://handwiki.org/wiki/Lanczos_resampling</a>
+</li>
+<li id="cite-5">
+<span class="src-title">jeffboody, Lanczos Resampling. GitHub项目, Lanczos核公式与支撑域说明.</span>
+<a class="src-url" href="https://github.com/jeffboody/Lanczos" target="_blank" rel="noopener">https://github.com/jeffboody/Lanczos</a>
+</li>
+<li id="cite-6">
+<span class="src-title">电子与信息学报, 一种自适应图像插值算法及加速引擎的协同设计. 双线性/双三次PSNR对比数据.</span>
+<a class="src-url" href="https://jeit.ac.cn/cn/article/doi/10.11999/JEIT221503?viewType=HTML" target="_blank" rel="noopener">https://jeit.ac.cn/cn/article/doi/10.11999/JEIT221503</a>
+</li>
 </ol>
 </div>
 </footer>
+
 </div>
 </body>
 </html>
