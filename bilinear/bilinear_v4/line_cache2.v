@@ -149,6 +149,7 @@ module line_cache2 #(
             rd11 <= {DW{1'b0}};
         end
         else begin
+            //一块BRAM只能一写一读，所以之前把相同的值同时存在了line_a和line_b，这里能实现二读二写
             rd00 <= line_a[sy00 % 3][sx00];   // 左上：sy 行的 sx 列
             rd10 <= line_b[sy00 % 3][sx10];   // 右上：sy 行的 sx+1 列
             rd01 <= line_a[sy01 % 3][sx00];   // 左下：sy+1 行的 sx 列
