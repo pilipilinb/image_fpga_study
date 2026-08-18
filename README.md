@@ -1,9 +1,9 @@
 # image_fpga_study · FPGA 图像处理学习项目
 
-> 换工作向 FPGA 图像处理学习项目（2026-08）· 主线程三个子系统已全部手写实现并仿真验证
+> 换工作向 FPGA 图像处理学习项目（2026-08）· 六个子系统已手写实现并仿真验证（W4 收尾中：Sobel/串链路待办）
 > 纯 RTL 推断实现（不依赖任何 FPGA IP），iverilog 仿真 + 自校验 TB + Python 独立校验脚本
 
-`Verilog` `手写 RTL` `行缓存` `色彩空间转换` `双线性插值` `自校验 TB` `iverilog` `PSNR 验证`
+`Verilog` `手写 RTL` `行缓存` `色彩空间转换` `双线性插值` `均值滤波` `高斯滤波` `中值滤波` `排序网络` `自校验 TB` `iverilog` `PSNR 验证`
 
 ---
 
@@ -17,6 +17,9 @@
   - [bilinear · 双线性插值缩放（W3）](#bilinear--双线性插值缩放w3)
     - [bilinear_v3 · 整图 ROM 版](#bilinear_v3--整图-rom-版)
     - [bilinear_v4 · 行缓存版](#bilinear_v4--行缓存版)
+  - [MeanFilter · 均值滤波（W4）](#meanfilter--均值滤波w4)
+  - [GaussianFilter · 高斯滤波（W4）](#gaussianfilter--高斯滤波w4)
+  - [MedianFilter · 中值滤波（W4）](#medianfilter--中值滤波w4)
 - [目录结构](#目录结构)
 - [快速开始](#快速开始)
 - [验证工具链](#验证工具链)
@@ -27,13 +30,16 @@
 
 ## 项目简介
 
-用 Verilog 手写实现 FPGA 图像处理链路上的三个基础子系统，均不依赖 Xilinx/Intel 算法 IP：
+用 Verilog 手写实现 FPGA 图像处理链路上的五个基础子系统，均不依赖 Xilinx/Intel 算法 IP：
 
 | 子系统 | 类别 | 一句话定位 |
 |---|---|---|
 | **行缓存（LINE_BUFFER）** | 邻域运算地基 | N×N 窗口生成器，卷积/缩放/滤波的复用底座 |
 | **色彩空间转换（CSC）** | 逐像素点运算 | RGB → YCbCr（BT.601），1 对 1 映射，不需要行缓存 |
 | **双线性插值缩放（bilinear）** | 邻域运算 | 任意整数倍缩放（放大 N 倍 / 缩小 N 倍）；v3 整图 ROM 版 + v4 行缓存版（大图/实时视频） |
+| **均值滤波（MeanFilter）** | 邻域运算（滤波） | 3×3 窗口 9 像素平均，9 路加法树 + 除 9 定点近似；crop/pad 双版本 |
+| **高斯滤波（GaussianFilter）** | 邻域运算（滤波） | 高斯核 [1 2 1;2 4 2;1 2 1]，对称分组 + 移位加权 0 乘法器，去噪优于均值 |
+| **中值滤波（MedianFilter）** | 邻域运算（非线性滤波） | 排序取中值：19 比较器行排序三部曲，椒盐噪声碾压线性滤波（+5.7dB） |
 
 每个子系统都遵循同样的学习闭环：**算法原理推导 → 定点化设计 → 手写 RTL → 自校验 TB → 独立脚本二次校验 → 中文讲解文档**。
 
@@ -46,7 +52,7 @@
 | W1 | 行缓存范式 | 手写行缓存仿真跑通；讲清 BRAM 存 N-1 行 + 窗口移位、为什么用 BRAM 不用 FIFO | ✅ `LINE_BUFFER/` |
 | W2 | 手写 CSC（不用 IP） | 手写 CSC 仿真跑通；能推导转换矩阵；讲清定点化位宽与限幅 | ✅ `CSC/` |
 | W3 | 双线性插值缩放 | 手写缩放仿真跑通；能讲四权重计算、行列两级衔接 | ✅ `bilinear/`（v3 整图 ROM 版 + v4 行缓存版） |
-| W4 | 2D 卷积滤波 + 收尾 | 均值/高斯卷积仿真跑通；四模块串链路 | ⬜ 待执行 |
+| W4 | 2D 卷积滤波 + 收尾 | 均值/高斯/中值卷积仿真跑通；能讲"对称核怎么用 pre-add 省乘法器"、"排序网络取中值"、"手写 vs IP"差异；四模块串链路 | 🔶 进行中：`MeanFilter/`、`GaussianFilter/`、`MedianFilter/` 三滤波已实现验证（椒盐：中值 26.18dB 碾压；高斯：均值/高斯略优）；Sobel/串链路/IP 对比待办 |
 
 ---
 
@@ -139,6 +145,72 @@ RGB888 图像按**整数倍缩放**（`OUT = IN × SCALE_N / SCALE_D`，分子=�
 
 ---
 
+### MeanFilter · 均值滤波（W4）
+
+3×3 窗口 9 像素平均（`out = Σw / 9`），作用于高斯噪声去噪。**crop/pad 双版本**：crop 版输出 (H-2)×(W-2)（简单）；pad 版全尺寸 H×W（边缘 replicate，靠 blanking 空拍补右/下边 flush，级联不缩水）。
+
+| 模块 | 职责 |
+|---|---|
+| `mean_3x3_8b.v` | 8bit 均值核：9 路加法树（3 级流水）+ 除 9 定点近似 `(sum×57+256)>>9` + 饱和 |
+| `top_mean_filter.v` / `top_mean_filter_pad.v` | 顶层：1×行缓存(DW=24) + 3×核（R/G/B），crop/pad 两版 |
+| `tb_mean_filter.v` / `tb_mean_filter_pad.v` | 自检 TB（定点全等 + 浮点误差统计 + 气泡/blanking 压力） |
+| `noise_add.py` | 高斯噪声生成 + 滤波前后对比图 + PSNR（--full 支持 pad 版） |
+
+验证结果（σ=40 高斯噪声去噪）：crop 22.14 dB / pad 22.18 dB，去噪提升 +4.58/+4.62 dB；除 9 近似实测误差 0.89 LSB（≤1）。
+
+设计要点：**9 不是 2 的幂**——除 9 用定点近似 ×57>>9（误差 0.2%、纯乘加可进 DSP48）而非直接除法器。
+
+文档：[MeanFilter/README.md](MeanFilter/README.md)
+
+---
+
+### GaussianFilter · 高斯滤波（W4）
+
+高斯核 **[[1 2 1],[2 4 2],[1 2 1]]**，中心权重最大、越远越小——平滑噪声的同时比均值**更保边缘**。
+
+**系数推导（本次学习核心）**：一维高斯采样（σ=0.849 精确导出 [1,2,1]；σ≈1 为习惯近似）→ 可分离外积得到二维核 → 核总和 16=2⁴，归一化就是右移 4 位。
+
+| 模块 | 职责 |
+|---|---|
+| `gaussian_3x3_8b.v` | 8bit 高斯核：对称分组（角/边/中心）+ 移位加权（×1/×2/×4）+ `(sum+8)>>4`，**0 个乘法器** |
+| `top_gaussian_filter.v` | 顶层：1×行缓存(DW=24) + 3×核 |
+| `tb_gaussian_filter.v` | 自检 TB（两帧：真图 + 纯色均值不变性；加权浮点误差统计） |
+
+验证结果（去噪 σ=40，同一份 noise.hex）：**22.50 dB（+4.94）**，比均值滤波 22.14 dB 高 0.36 dB——中心权重 4/16 保边缘的效果。
+
+设计要点：**对称分组 + 2 的幂系数（1/2/4）= 0 乘法器**——教材"9 乘法器 → pre-adder 4 乘法器"在此退化到 0，pre-adder 的价值在任意系数对称核（Sobel）才体现。
+
+文档：[GaussianFilter/README.md](GaussianFilter/README.md)（含系数推导全流程）
+
+---
+
+### MedianFilter · 中值滤波（W4）
+
+3×3 窗口 9 像素**排序取中值**（第 5 大/小）——非线性滤波，椒盐噪声（脉冲 0/255）的主场：窗口内极值点少于 5 个时中值必为真实像素，脉冲被直接剔除；对比之下均值/高斯会把极值"抹开"成灰斑。
+
+| 模块 | 职责 |
+|---|---|
+| `median_3x3_8b.v` | ★ 中值核：**行排序三部曲排序网络（19 比较器）**：三行 sort3（9）→ 三列候选提取（7）→ 三数取中（3） |
+| `top_median_filter.v` | 顶层：1×行缓存(DW=24) + 3×核 |
+| `tb_median_filter.v` | 自检 TB（参考模型 = 计数法取第 5 小，与排序网络不同源） |
+| `noise_add.py` | 噪声工具（新增 `--salt` 椒盐模式） |
+
+**去噪对比实测（同一份噪声图过三滤波器）**：
+
+| 滤波器 | 椒盐（p=0.10） | 高斯（σ=40） |
+|---|---|---|
+| 均值 | 20.53 dB | 22.14 dB |
+| 高斯 | 20.44 dB | 22.50 dB |
+| **中值** | **26.18 dB（碾压 +5.7dB）** | 22.01 dB（垫底） |
+
+交叉验证的知识点：**脉冲噪声选中值，高斯噪声选线性加权**——排序免疫极端值，但也丢弃数值信息。
+
+设计要点：**找中值 ≠ 全排序**（19 比较器 vs 几十个）；反例 {{5,2,8},{4,9,1},{7,3,6}} 证明"cand2 必须取三行 mid 的中值"（16 比较器错误版被推翻）。
+
+文档：[MedianFilter/README.md](MedianFilter/README.md)（含行排序三部曲推导与反例记录）
+
+---
+
 ## 目录结构
 
 ```
@@ -165,6 +237,18 @@ image_fpga_study/
 │       ├── line_cache2.v / bilinear_lb_top.v / tb_bilinear_lb.v
 │       ├── line_buffer_principle.html
 │       └── README.md
+├── MeanFilter/                # W4 3×3 均值滤波（crop/pad 双版本 + 去噪实验）
+│   ├── mean_3x3_8b.v / top_mean_filter(_pad).v / tb_*.v
+│   ├── noise_add.py / noise.hex / *.png
+│   └── README.md
+├── GaussianFilter/            # W4 3×3 高斯滤波（对称分组 0 乘法器 + 系数推导）
+│   ├── gaussian_3x3_8b.v / top_gaussian_filter.v / tb_gaussian_filter.v
+│   ├── noise_add.py / noise.hex / *.png / 高斯滤波实现计划.md
+│   └── README.md
+├── MedianFilter/              # W4 3×3 中值滤波（19 比较器排序网络 + 椒盐去噪）
+│   ├── median_3x3_8b.v / top_median_filter.v / tb_median_filter.v
+│   ├── noise_add.py / salt_pepper.hex / *.png / 中值滤波实现计划.md
+│   └── README.md
 ├── .gitignore                 # 仿真产物（*.vcd/*.vvp/*.v.out 等）
 └── README.md                  # 本文档
 ```
@@ -193,6 +277,18 @@ iverilog -I . -o tb.vvp tb_bilinear_rgb.v
 vvp tb.vvp > sim_top.txt
 python verify_scale.py --in-hex input.hex --out-coe output.coe --in-w 112 --in-h 103 --scale-n 2 --scale-d 1 --log verify_scale.log
 # 缩小 2 倍改传 --scale-n 1 --scale-d 2
+
+# 4. 均值/高斯滤波（W4，含高斯噪声去噪对比）
+cd ../../MeanFilter
+iverilog -I . -o tb.vvp tb_mean_filter.v; vvp tb.vvp > sim_log.txt
+python noise_add.py --sigma 40                     # 生成噪声图
+iverilog -DNOISE -I . -o tb_n.vvp tb_mean_filter.v; vvp tb_n.vvp > sim_noise.txt
+python noise_add.py --compare --sigma 40           # 对比图 + PSNR
+
+cd ../GaussianFilter
+iverilog -I . -o tb.vvp tb_gaussian_filter.v; vvp tb.vvp > sim_log.txt
+iverilog -DNOISE -I . -o tb_n.vvp tb_gaussian_filter.v; vvp tb_n.vvp > sim_noise.txt
+python noise_add.py --compare --sigma 40           # 高斯 vs 均值 22.14dB 对照
 ```
 
 查看波形：`gtkwave tb_x.vcd`
@@ -218,6 +314,8 @@ python verify_scale.py --in-hex input.hex --out-coe output.coe --in-w 112 --in-h
 - **FIFO 行缓存版**：外部参考代码，无 TB；读模式必须 FWFT（标准模式每级斜 1 像素）；存在 `always @(*)` 内用 `<=` 等代码风格问题
 - **padding 版依赖 blanking**：h-blank≥1 拍、v-blank≥W+8 拍，无空拍则物理上无法补出全尺寸
 - **bilinear 支持整数倍缩放**（放大 N 倍 / 缩小 N 倍）：非整数倍（N/M 比例）参数化支持但未专项验证；大比例缩小（1/8 及以下）2×2 采样不抗混叠，PSNR 显著下降；v3 的 4 份 ROM 随输入尺寸线性膨胀（v4 行缓存版存储恒定，行列并行度需按 BRAM 读端口另行考量）
+- **均值滤波除 9 为近似**（×57>>9）：实测误差 0.89 LSB（<1 视觉无感）；要求零误差需换除法器；判断"滤波是否有效"用去噪实验的 PSNR 提升（σ=40 时 +4.58 dB）
+- **高斯滤波 σ 固定**：核 [1 2 1;2 4 2;1 2 1] 对应 σ≈0.849；换 σ 需重推核并保持总和为 2 的幂，否则归一化不能纯移位；3×3 窗口未走可分离（大核 5×5 起用行/列两次一维卷积更省）
 
 ---
 
