@@ -1,6 +1,6 @@
 # image_fpga_study · FPGA 图像处理学习项目
 
-> 换工作向 FPGA 图像处理学习项目（2026-08）· 六个子系统已手写实现并仿真验证（W4 收尾中：Sobel/串链路待办）
+> 换工作向 FPGA 图像处理学习项目（2026-08）· 六个子系统已手写实现并仿真验证（W4 收尾中：Sobel/IP 对比待办）
 > 纯 RTL 推断实现（不依赖任何 FPGA IP），iverilog 仿真 + 自校验 TB + Python 独立校验脚本
 
 `Verilog` `手写 RTL` `行缓存` `色彩空间转换` `双线性插值` `均值滤波` `高斯滤波` `中值滤波` `排序网络` `自校验 TB` `iverilog` `PSNR 验证`
@@ -20,6 +20,7 @@
   - [MeanFilter · 均值滤波（W4）](#meanfilter--均值滤波w4)
   - [GaussianFilter · 高斯滤波（W4）](#gaussianfilter--高斯滤波w4)
   - [MedianFilter · 中值滤波（W4）](#medianfilter--中值滤波w4)
+    - [三滤波器对比：资源 + 效果（W4）](#三滤波器对比资源--效果w4)
 - [目录结构](#目录结构)
 - [快速开始](#快速开始)
 - [验证工具链](#验证工具链)
@@ -52,7 +53,7 @@
 | W1 | 行缓存范式 | 手写行缓存仿真跑通；讲清 BRAM 存 N-1 行 + 窗口移位、为什么用 BRAM 不用 FIFO | ✅ `LINE_BUFFER/` |
 | W2 | 手写 CSC（不用 IP） | 手写 CSC 仿真跑通；能推导转换矩阵；讲清定点化位宽与限幅 | ✅ `CSC/` |
 | W3 | 双线性插值缩放 | 手写缩放仿真跑通；能讲四权重计算、行列两级衔接 | ✅ `bilinear/`（v3 整图 ROM 版 + v4 行缓存版） |
-| W4 | 2D 卷积滤波 + 收尾 | 均值/高斯/中值卷积仿真跑通；能讲"对称核怎么用 pre-add 省乘法器"、"排序网络取中值"、"手写 vs IP"差异；四模块串链路 | 🔶 进行中：`MeanFilter/`、`GaussianFilter/`、`MedianFilter/` 三滤波已实现验证（椒盐：中值 26.18dB 碾压；高斯：均值/高斯略优）；Sobel/串链路/IP 对比待办 |
+| W4 | 2D 卷积滤波 + 收尾 | 均值/高斯/中值卷积仿真跑通；能讲"对称核怎么用 pre-add 省乘法器"、"排序网络取中值"、"手写 vs IP"差异；四模块串链路 | 🔶 进行中：`MeanFilter/`、`GaussianFilter/`、`MedianFilter/` 三滤波已实现验证（椒盐：中值 26.18dB 碾压；高斯：均值/高斯略优）；**`filter_csc_bilinear/` 串链路已跑通**（混合噪声→高斯+中值→CSC→放大2x，逐级 PSNR ≥51dB）；Sobel/IP 对比待办 |
 
 ---
 
@@ -211,6 +212,54 @@ RGB888 图像按**整数倍缩放**（`OUT = IN × SCALE_N / SCALE_D`，分子=�
 
 ---
 
+### 三滤波器对比：资源 + 效果（W4）
+
+**资源实测（Vivado 2021.2 `synth_design`，xc7z010-1，OOC 无约束，单通道 8bit 核；脚本 [MedianFilter/synth_compare.tcl](MedianFilter/synth_compare.tcl)）**：
+
+| 核（8bit 单通道） | LUT | FF | DSP48 | 算法结构 |
+|---|---|---|---|---|
+| mean_3x3_8b | 77 | 53 | **1** | 9 路加法树 + 乘 57（映射进 DSP48） |
+| gaussian_3x3_8b | **67** | 49 | **0** | 对称分组加法树 + 移位加权 |
+| median_3x3_8b | **410** | 18 | 0 | 19 比较器排序网络（比较+选择树） |
+
+- 三通道 RGB = 单核 ×3；行缓存三者共用（2 块 BRAM/通道），不参与算法对比
+- **结论 1**：高斯核最省（对称分组 + 2 的幂系数 = 0 DSP + 最少 LUT）
+- **结论 2**：均值核的 ×57 定点乘法被 Vivado 映射进 1 个 DSP48——"乘加可进 DSP"的实证；LUT 与高斯相当
+- **结论 3**：中值核 **LUT 是高斯的 6 倍**（19 个 8bit 比较器 + 每级选择 mux 是 LUT 大户）——排序网络省 DSP 但吃 LUT，工业上 8bit 中值常用位平面/直方图法折衷
+- 面试表述："**资源结构跟着算法结构走：加法树 + 乘法 → LUT + DSP48；移位系数 → 0 DSP48；比较网络 → LUT 大户**，所以选型是效果与资源的联合权衡"
+
+**效果对比（同一份噪声图，PSNR）**：
+
+| 滤波器 | 椒盐 p=0.10 | 高斯 σ=40 |
+|---|---|---|
+| 均值 | 20.53 dB | 22.14 dB |
+| 高斯 | 20.44 dB | 22.50 dB |
+| 中值 | **26.18 dB** | 22.01 dB |
+
+结论：椒盐选中值（效果碾压、代价 LUT 最大）；高斯滤波兼顾（效果最好 + 资源最省）——均值滤波在两者间的性价比一般。
+
+---
+
+### filter_csc_bilinear · 滤波+CSC+缩放 串链路（W4 收尾）
+
+**混合噪声图（高斯 σ=20 + 椒盐 p=0.10）→ 高斯滤波 → 中值滤波 → CSC(RGB→YCbCr) → 双线性放大 2 倍**，四级模块流式级联（W4 计划"四模块串链路"的实际执行版，按用户指定以"高斯+中值"替换"均值+高斯"）。
+
+| 级 | 尺寸 | 像素数 | 逐级 PSNR（浮点参考） |
+|---|---|---|---|
+| 输入（混合噪声图） | 112×103 | 11536 | 13.79 dB（噪声度） |
+| 高斯滤波 | 110×101 | 11110 ✓ | 63.19 dB |
+| 中值滤波 | 108×99 | 10692 ✓ | inf dB（全等） |
+| CSC（YUV 打包） | 108×99 | 10692 ✓ | 51.13 dB |
+| **缩放输出** | **216×198** | **42768 ✓** | **56.31 dB** |
+
+设计要点：**速率匹配 FIFO**（无背压前级 vs 缩放反压之间的帧缓冲，深度 2^14 保证不溢出）；YUV 打包作三通道独立插值（数学等价）；crop 收缩链（±2/级）接受。
+
+调试亮点（面试可讲）：AXIS FIFO **valid 保持语义**（只打 1 拍会在反压时悬空丢数据，实测差 95 像素）；RGB 中值 = **逐通道中值**（参考模型必须与 RTL 通道粒度一致，初版整像素排序 FAIL 31.5dB 定位）。
+
+文档：[filter_csc_bilinear/README.md](filter_csc_bilinear/README.md)（含 7 条面试工程要点）· 验证脚本 [verify_chain.py](filter_csc_bilinear/verify_chain.py)
+
+---
+
 ## 目录结构
 
 ```
@@ -248,6 +297,10 @@ image_fpga_study/
 ├── MedianFilter/              # W4 3×3 中值滤波（19 比较器排序网络 + 椒盐去噪）
 │   ├── median_3x3_8b.v / top_median_filter.v / tb_median_filter.v
 │   ├── noise_add.py / salt_pepper.hex / *.png / 中值滤波实现计划.md
+│   └── README.md
+├── filter_csc_bilinear/       # W4 收尾 滤波+CSC+缩放 串链路
+│   ├── top_chain.v / axis_fifo.v / tb_chain.v / verify_chain.py
+│   ├── 滤波CSC缩放串链路实现计划.md / *.coe / *.png
 │   └── README.md
 ├── .gitignore                 # 仿真产物（*.vcd/*.vvp/*.v.out 等）
 └── README.md                  # 本文档
