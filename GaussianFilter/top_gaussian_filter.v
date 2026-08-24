@@ -17,8 +17,8 @@
 //========================================================================
 `timescale 1ns/1ps
 
-`include "line_buffer_3x3.v"
-`include "gaussian_3x3_8b.v"
+// (include 已移至使用方统一声明：本目录文件由各 TB/工程顶层按需 include，
+//  避免与可分离版等新增文件重复定义——约定同 filter_csc_bilinear 链路工程)
 
 module top_gaussian_filter #(
     parameter IMG_W = 112,     // 图像宽
