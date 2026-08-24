@@ -1,0 +1,3 @@
+VCD info: dumpfile tb_sobel.vcd opened for output.
+========================================
+[PASS] sobel OK: 23072 窗口全对（2 帧 thresh=64/48，INIT=input.hex）
