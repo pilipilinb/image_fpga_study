@@ -1,15 +1,17 @@
 //========================================================================
-// tb_gaussian_filter.v —— 3×3 高斯滤波自检 TB（GaussianFilter 工程）
+// tb_gaussian_filter.v — 3×3 高斯滤波自检 TB（GaussianFilter 工程）
 // 验证内容：
-//   1. 全帧逐窗口比对：与 RTL 同款定点参考（对称分组移位 + 舍入)严格全等
+//   1. 全帧逐窗口比对：与 RTL 同款定点参考（对称分组移位 + 舍入）严格全等
 //   2. 近似精度统计：浮点基准 = 整数点积/16.0（非浮点核卷积），报告最大误差（≤0.5 LSB）
-//   3. 均值不变性：第二帧喂全 0x808080 纯色图，输出必须恒 0x80（核和=16 保证）
+//   3. 均值不变性：第二帧喂 0x808080 纯色图，输出必须 0x80（核和 16 保证）
 //   4. 窗口数核对：两帧各 (IMG_H-2)×(IMG_W-2)，共 2 倍；行内随机气泡验证鲁棒
 // 激励规范（守工程实践）：negedge 置位、先设置后等待、超时兜底、VCD
-// 配置：iverilog 加 -DSMALL 跑 4×3 合成小图；-DNOISE 第一帧改喂 noise.hex
+// 配置：iverilog 加 -DSMALL 4×3 合成小图、-DNOISE 第一帧改为 noise.hex
 //       并只把第一帧结果写 output.coe（供噪声去噪对比）
 //========================================================================
 `timescale 1ns/1ps
+`include "line_buffer_3x3.v"
+`include "gaussian_3x3_8b.v"
 `include "top_gaussian_filter.v"
 
 module tb_gaussian_filter;
@@ -23,7 +25,7 @@ module tb_gaussian_filter;
 `endif
     localparam IN_TOTAL = IMG_W * IMG_H;
     localparam WIN_PER_FRAME = (IMG_H - 2) * (IMG_W - 2);
-    localparam EXP_CNT  = WIN_PER_FRAME * 2;      // 两帧（真实/纯色）
+    localparam EXP_CNT  = WIN_PER_FRAME * 2;      // 两帧（真图+纯色）
 `ifdef SMALL
     localparam INIT_FILE = "input_4x3.hex";
 `elsif NOISE
