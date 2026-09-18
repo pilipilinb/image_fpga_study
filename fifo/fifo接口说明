@@ -1,0 +1,16 @@
+
+line_fifo u_line_fifo(
+    .wr_clk (clk),
+    .rd_clk (clk),
+    .rst (!rst_n),
+    .din (din),
+    .wr_en (valid_in),
+    .rd_en (rd_en),
+    .dout(dout),
+
+    .empty(),
+    .full(),
+    .data_count(),    
+    .wr_rst_busy(),  
+    .rd_rst_busy()
+);
