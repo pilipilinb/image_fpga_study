@@ -27,10 +27,10 @@
 // ============================================================================
 `timescale 1ns/1ps
 
-`ifndef ASYNC_FIFO_V_INC
-`define ASYNC_FIFO_V_INC
-`include "async_fifo.v"          // 依赖：fifo/async_fifo.v（编译时 -I 指向 fifo 目录）
-`endif
+`ifndef FWFT_WRAPPER_V_INC
+`define FWFT_WRAPPER_V_INC
+
+`include "async_fifo.v"          // 依赖：fifo/async_fifo.v（自带同名守卫；-I 指向 fifo 目录）
 
 module fwft_wrapper #(
     parameter DW    = 10,        // 数据位宽
@@ -89,3 +89,5 @@ module fwft_wrapper #(
     assign busy    = wr_busy | rd_busy;
 
 endmodule
+
+`endif  // FWFT_WRAPPER_V_INC

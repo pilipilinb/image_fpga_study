@@ -33,6 +33,9 @@
 // ============================================================================
 `timescale 1ns/1ps
 
+`ifndef ASYNC_FIFO_V_INC
+`define ASYNC_FIFO_V_INC
+
 module async_fifo #(
     parameter DW    = 8,          // 数据位宽
     parameter DEPTH = 512         // 深度（必须 2 的幂）
@@ -202,3 +205,5 @@ module async_fifo #(
     assign data_count = wbin_sync_r - rbin;                  // 位宽 AW+1，差值天然落在 0..DEPTH
 
 endmodule
+
+`endif  // ASYNC_FIFO_V_INC

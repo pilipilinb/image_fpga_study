@@ -27,6 +27,7 @@
   - [Sobel · 边缘检测（W4）](#sobel--边缘检测w4)
   - [filter_csc_bilinear · 滤波+CSC+缩放 串链路（W4 收尾）](#filter_csc_bilinear--滤波csc缩放-串链路w4-收尾)
   - [BLC · 黑电平校正（M2，ISP 第一级）](#blc--黑电平校正m2isp-第一级)
+  - [BAYER_DPC_DEMOSAIC · DPC→Demosaic 串联链（M3，Bayer 域 RAW10）](#bayer_dpc_demosaic--dpcdemosaic-串联链m3bayer-域-raw10)
 - [目录结构](#目录结构)
 - [快速开始](#快速开始)
 - [验证工具链](#验证工具链)
@@ -43,6 +44,7 @@
 |---|---|---|
 | **手写 FIFO 基础件（fifo）** | 基础设施 | 双时钟 FIFO（对齐 FIFO Generator）+ AXIS Data FIFO（侧带打包 tuser/tlast）：跨域、速率匹配、链路首尾弹性缓冲 |
 | **黑电平校正（BLC）** | 逐像素点运算（ISP 第一级） | max(p−OB[相位], 0) 四通道饱和减；AXIS(RAW10) 入口 + 写法乙省位宽 + out_phase 直供后级 |
+| **DPC→Demosaic 串联链（M3）** | Bayer 域 5×5 窗口两级 | 算法核参数化复用旧工程 + 简流反压 + 窗口相位自算；DPC 后 Bayer 域 28.33→38.84dB（+10.51） |
 | **行缓存（LINE_BUFFER）** | 邻域运算地基 | N×N 窗口生成器，卷积/缩放/滤波的复用底座；含 FIFO 版（支持反压 + 可换 IP） |
 | **色彩空间转换（CSC）** | 逐像素点运算 | RGB → YCbCr（BT.601），1 对 1 映射，不需要行缓存 |
 | **双线性插值缩放（bilinear）** | 邻域运算 | 任意整数倍缩放（放大 N 倍 / 缩小 N 倍）；v3 整图 ROM 版 + v4 行缓存版（大图/实时视频） |
@@ -166,8 +168,8 @@ CSI-2 RX ─AXIS─► [AXIS 适配 + 入端弹性 FIFO]
 | 级 | 处理域 | 输入 → 输出 | 邻域/资源依赖 | 现状 |
 |---|---|---|---|---|
 | BLC 黑电平校正 | Bayer | RAW → RAW | 无（逐像素减偏置，每通道一个偏置） | ✅ 已实现（Month-2 M2：双形态双判据 0 误差；图像链 PSNR 不校 19.47dB → 校准 inf / 校偏 36.12dB） |
-| DPC 坏点校正 | Bayer | RAW → RAW | 5×5 窗口 | 已实现（包络检测，位级全等；注入 60 坏点实测 26.43 → 31.91 dB） |
-| Demosaic 去马赛克 | Bayer → RGB | RAW → RGB888 | 5×5 窗口 | 已实现（双线性 + MHC 双版本，vs 原图 26.05 / 29.23 dB） |
+| DPC 坏点校正 | Bayer | RAW → RAW | 5×5 窗口 | ✅ 新链路版（Month-2 M3：`dpc_envelope_dw.v` DW 参数化 + 简流反压；RAW10 注 60 坏点 28.33→38.84dB；8bit 旧版 26.43→31.91dB） |
+| Demosaic 去马赛克 | Bayer → RGB | RAW → RGB(3×DW) | 5×5 窗口 | ✅ 新链路版（Month-2 M3：双线性/MHC 双核 DW 参数化，换核不改线；RAW10 干净图基准下双线性 40.38dB；8bit 旧版 26.05/29.23dB） |
 | 降噪 | RGB | RGB → RGB | 3×3 窗口 | 已有三套可选（均值/高斯/中值；椒盐场景中值 26.18 dB 最优） |
 | AWB 自动白平衡 | RGB | RGB → RGB | **帧级统计** + 增益 | 未实现（统计 R/G/B 均值 → 增益，需帧级统计 + 增益延迟一帧生效） |
 | CCM 色彩校正矩阵 | RGB | RGB → RGB | 无（3×3 矩阵乘） | 未实现（唯一必须用乘法器/DSP 的一级） |
@@ -209,9 +211,9 @@ CSI-2 RX ─AXIS─► [AXIS 适配 + 入端弹性 FIFO]
 | **M0** | `async_fifo` 五阶段 [PASS]（含组合环 22.6GB 大坑复盘） | ✅ 2026-09-18 |
 | **M0.5** | `axis_stream_fifo` 手写（AXIS Data FIFO 对齐版，侧带打包 + 协议断言） | ✅ 2026-09-18 |
 | **M1** | `line_buffer_fifo_nxn`（FIFO 版 N×N，pad + 反压；双判据 0 误差，4 组参数含 640 宽图；稳态 1 pixel/clock） | ✅ 2026-09-18 |
-| **M2** | BLC（AXIS 适配 + 黑电平校正核，逐通道偏置） | ⬜ 下一步 |
-| **M3** | DPC 5×5 包络检测 + Demosaic（按历史指标重实现） | ⬜ |
-| **M4** | 降噪 / AWB / CCM / Gamma（Demosaic 出 RGB888 之后） | ⬜ |
+| **M2** | BLC（AXIS 适配 + 黑电平校正核，逐通道偏置） | ✅ 2026-09-19 |
+| **M3** | DPC→Demosaic 串联链（算法核参数化复用 + 简流反压 + hold_in 丢数修复；双核双判据 0 误差） | ✅ 2026-09-20 |
+| **M4** | 降噪 / AWB / CCM / Gamma（Demosaic 出 RGB 之后） | ⬜ 下一步 |
 | **M5** | 锐化 + 出端 AXIS 适配 + 8 级整链 | ⬜ |
 
 ---
@@ -520,6 +522,33 @@ RGB888 图像按**整数倍缩放**（`OUT = IN × SCALE_N / SCALE_D`，分子=�
 
 文档：[BLC/README.md](BLC/README.md) · 详细讲解 [BLC黑电平校正实现.md](BLC/BLC黑电平校正实现.md)（含写法甲乙对比、四要点落地、相位踩坑）
 
+### BAYER_DPC_DEMOSAIC · DPC→Demosaic 串联链（M3，Bayer 域 RAW10）
+
+ISP 第三/四级串联：**坏点校正 → 去马赛克**。算法核来自已验证的 `DPC/`、`Demosaic/` 工程（8bit 版），**算法逻辑零改动**，仅位宽参数化（8→DW）+ 接口适配（简流握手 + `line_buffer_fifo_nxn` pad 全尺寸 + 反压）。两级各自内含一份行缓存（窗口中心错开 K×(W+1) 个有效拍，共享不划算）。
+
+| 文件 | 说明 |
+|---|---|
+| `dpc_envelope_dw.v` / `demosaic_bilinear_dw.v` / `demosaic_mhc_dw.v` | 三个参数化核（源：DPC/Demosaic 工程），带 `hold_in` 保持 |
+| `dpc_stage.v` / `demosaic_stage.v` / `bayer_dpc_demosaic_top.v` | 行缓存 + **窗口相位自算** + 核 + 反压；`DEMOSAIC_SEL` 选双线性/MHC（换核不改线） |
+| `tb_bayer_dpc_demosaic.v` | 协议（16×12×5 帧四场景）/ 图像（真图 112×103）双模式，期望由 Python 预生成逐拍比对 |
+| `make_dpc_demosaic_data.py` | 真图→Bayer RAW10→BLC→注 60 坏点→期望链→PSNR→对比图 |
+
+**验证（四套 TB 全 PASS）**：双线性/MHC × 协议/图像，全部期望比对 0 误差 + 出侧稳定性断言零违例 + 收发计数一致（960/960、11536/11536）。
+
+**PSNR（RAW10，THR=128，注 60 坏点）**：
+
+| 口径 | 无 DPC | DPC 后 | 提升 |
+|---|---|---|---|
+| Bayer 域 | 28.33 dB | **38.84 dB** | +10.51 dB |
+| RGB 域·双线性 | 30.30 dB | **40.38 dB** | +10.08 dB |
+| RGB 域·MHC | — | 32.64 dB | — |
+
+→ 坏点链上 **MHC 反而低于双线性**（无坏点时 MHC 更锐）——MHC 的高通细节项会放大 DPC 残留（漏网/边缘误伤），双线性的平均将其抹平。对比图 [dpc_demosaic_compare.png](Bayer_DPC_Demosaic/dpc_demosaic_compare.png)。
+
+关键设计/踩坑：① **`hold_in` 保持**——"LAT=1 核直接当输出寄存器"必须配保持语义，否则行缓存弹出（滞后一拍的 ostall 决策）与下游取走之间的时序差会丢数（TB 断言海量"valid 未 ready 撤销"实锤）；② 窗口相位自算（光栅序计数器）替代"输入相位打 K 拍延迟链"，任意反压/气泡严格对齐；③ 跨帧语义 = 行缓存帧间排空 → 每帧独立（clamp 窗口）；④ pad 版边缘窗口用 replicate 像素参与判定（旧 crop 版直接不输出边缘）。
+
+文档：[Bayer_DPC_Demosaic/README.md](Bayer_DPC_Demosaic/README.md)
+
 ---
 
 ## 目录结构
@@ -586,6 +615,11 @@ image_fpga_study/
 │   ├── make_blc_data.py / verify_blc.py / verify_blc_img.py
 │   ├── blc_compare.png
 │   ├── BLC黑电平校正实现.md
+├── Bayer_DPC_Demosaic/        # M3 DPC→Demosaic 串联链（Bayer 域 RAW10，算法核参数化复用）
+│   ├── dpc_envelope_dw.v / demosaic_bilinear_dw.v / demosaic_mhc_dw.v
+│   ├── dpc_stage.v / demosaic_stage.v / bayer_dpc_demosaic_top.v
+│   ├── tb_bayer_dpc_demosaic.v / make_dpc_demosaic_data.py
+│   ├── dpc_demosaic_compare.png
 │   └── README.md
 └── README.md                  # 本文档
 ```
@@ -652,6 +686,15 @@ python verify_blc.py blc_out.txt 16 12 5                   # numpy 独立复算
 python make_blc_data.py                                    # 真图 -> 理想/带黑电平 RAW10
 iverilog -o tb_img.vvp -I ..\fifo tb_blc_img.v; vvp tb_img.vvp > sim_log_img.txt       # 图像链
 python verify_blc_img.py                                   # 位级 + PSNR 三组 + blc_compare.png
+
+# 9. DPC→Demosaic 串联链（Month-2 M3，双核双模式）
+cd ../Bayer_DPC_Demosaic
+python make_dpc_demosaic_data.py                           # 协议场景期望（16x12x5 帧）
+iverilog -o tb_s_b.vvp -DNOVCD -I . -I ..\line_buffer\line_buffer_fifo_nxn -I ..\fifo tb_bayer_dpc_demosaic.v
+vvp tb_s_b.vvp > sim_log_s_b.txt                           # 协议 TB（加 -DMHC 换 MHC 核）
+python make_dpc_demosaic_data.py --img                     # 真图链：BLC后+60坏点 -> 期望+PSNR+对比图
+iverilog -o tb_i_b.vvp -DNOVCD -DIMG -I . -I ..\line_buffer\line_buffer_fifo_nxn -I ..\fifo tb_bayer_dpc_demosaic.v
+vvp tb_i_b.vvp > sim_log_i_b.txt                           # 图像 TB（-DMHC 同理）
 ```
 
 查看波形：`gtkwave tb_x.vcd`
@@ -687,7 +730,8 @@ python verify_blc_img.py                                   # 位级 + PSNR 三�
 - **FIFO 版行缓存的造行期反压**：帧末造行 `in_ready=0` 持续 `K×W+K` 拍，上游必须靠入端弹性 FIFO 吸收（模块刻意不做入端 FIFO，保持单一职责）；集成时首尾用 AXIS Data FIFO IP
 - **`$random` 是有符号的（TB 通用坑）**：`($random % 1000)` 遇负值恒小于阈值，会让概率完全走样（"2% 长拉低"变成几乎全程拉低）；一律写 `{$random} % 1000`
 - **BRAM pad 版行缓存 `line_buffer_nxn_pad` 已弃用**：其 `row_cnt/col_cnt` 复位用了裸 `din_sof`（未与 valid 门控），首个 beat 的计数被复位吃掉 → 帧末造行触发条件永不满足（自身 TB 亦超时）。后续行缓存统一用 `line_buffer_fifo_nxn`（支持反压 + 可换 IP）
-- **Demosaic / DPC 源码为空且无备份**（影响 Month-2 M3）：需按历史指标（DPC 26.43→31.91dB；Demosaic 双线性 26.05 / MHC 29.23dB）在新接口下重实现
+- **Demosaic / DPC 旧源码曾被清空**：8bit 旧版已从备份恢复（`DPC/`、`Demosaic/`，历史指标 DPC 26.43→31.91dB；双线性 26.05 / MHC 29.23dB）；Month-2 M3 已在其基础上完成 DW 参数化 + 简流反压新链路（`Bayer_DPC_Demosaic/`），RAW10 域新指标见其 README
+- **给无守卫文件补 include 守卫时的连带修改**：`async_fifo.v` 加守卫后，`fwft_wrapper.v` 里旧的"`define ASYNC_FIFO_V_INC` 再 include"写法会把整个 async_fifo 内容屏蔽（宏已置位）→ 必须删掉这个过时 define，直接 include（靠 async_fifo 自带守卫防重复）
 
 ---
 

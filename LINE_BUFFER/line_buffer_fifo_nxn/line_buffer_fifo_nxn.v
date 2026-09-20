@@ -69,10 +69,9 @@
 // ============================================================================
 `timescale 1ns/1ps
 
-`ifndef FWFT_WRAPPER_V_INC
-`define FWFT_WRAPPER_V_INC
+`ifndef LINE_BUFFER_FIFO_NXN_V_INC
+`define LINE_BUFFER_FIFO_NXN_V_INC
 `include "fwft_wrapper.v"
-`endif
 
 module line_buffer_fifo_nxn #(
     parameter DW    = 10,       // 像素位宽（Bayer/RAW10 域用 10）
@@ -364,3 +363,5 @@ module line_buffer_fifo_nxn #(
     assign out_eol      = out_eol_r;
 
 endmodule
+
+`endif  // LINE_BUFFER_FIFO_NXN_V_INC

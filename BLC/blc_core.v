@@ -32,7 +32,8 @@
 
 module blc_core #(
     parameter DW      = 10,        // 像素位宽（RAW10；8bit sensor 场景传 8）
-    parameter IMG_W   = 640,       // 行宽（Bayer 相位回绕双保险：eol 偶发丢失时靠列计数回绕）
+    parameter IMG_W   = 640,       // 行宽（列计数回绕兜底：eol 偶发丢失时 1 行内自愈）
+    parameter IMG_H   = 480,       // 帧高（行计数位宽由此推导）
     parameter BAYER_PATTERN = 2'b00 // 语义标注（RGGB 默认）：OB_00=R、OB_01=Gr、
                                        //   OB_10=Gb、OB_11=B。不同 pattern 时由软件把
                                        //   标定值写进对应相位的槽位，硬件逻辑不依赖此参数
@@ -52,44 +53,47 @@ module blc_core #(
     input  wire [DW-1:0] ob_11,        // (1,1)：RGGB 下 = B
     // ---- 出侧简流 ----
     output wire          out_valid,
-    input  wire          out_ready,
+    input  wire          out_ready, //下游模块提供
     output wire [DW-1:0] out_data,     // max(p - OB, 0)，饱和只 clamp 低边（减法无上溢）
     output wire          out_sof,
     output wire          out_eol,
     output wire [1:0]    out_phase     // 输出像素的 Bayer 相位 {row&1, col&1}，供 DPC/Demosaic 直接用
 );
 
-    // ---- 输入侧相位计数器 ----
-    // 【计数器语义（不变式）】fire 拍读到的 {row_p, col_cnt[0]} == 当前正在消费像素的
-    //   Bayer 相位；拍末推进到"下一像素"的相位。两处容易写错的地方（都踩过）：
+    // ---- 输入侧相位计数器（完整行列计数，DPC/top_dpc.v 同构风格）----
+    // 【计数器语义（不变式）】fire 拍读到的 {row_cnt[0], col_cnt[0]} == 当前正在消费
+    //   像素的 Bayer 相位；拍末推进到"下一像素"的坐标。三处容易写错的地方（都踩过）：
     //   ① sof 拍不能把 col 清零了事——本拍消费的就是 (0,0)，拍末必须推进到 1，
     //     否则下一拍 (0,1) 读到 0，整帧相位斜一列（首帧全错位的根因）。
-    //   ② 跨帧行奇偶残留：上帧 eol 后 row_p = H&1，若 H 为奇，下一帧 sof 拍读到 1。
+    //   ② 跨帧行奇偶残留：上帧末 row_cnt=H，若 H 为奇，下一帧 sof 拍读到 1。
     //     解法：sof 拍的 OB 选择与 out_phase 强制 00（sof 拍像素恒为 (0,0)），
-    //     同时 row_p 拍末清零——从下一拍起整帧相位严格对齐。
+    //     同时 row_cnt 拍末清零——从下一拍起整帧相位严格对齐。
+    //   ③ 与 DPC 老写法的关键差别：不靠 IMG_H/IMG_W 盲数数感知边界（丢 1 拍就永久
+    //     错位无自愈），而是 sof/eol 显式同步——上游任何丢拍最多错到下一个 eol/sof。
+    //     col 回绕仅作 eol 偶发丢失的兜底，正常流两者一致。
     localparam AW = $clog2(IMG_W);
-    reg        row_p;                       // 行奇偶（行号本身后级不需要，只需奇偶）
-    reg [AW-1:0] col_cnt;                   // 完整列计数：相位取 [0]，回绕做 eol 兜底
+    localparam RW = $clog2(IMG_H + 2);      // row_cnt 一帧内最大到 H（最后 eol 拍 +1）
+    reg [RW-1:0] row_cnt;                   // 行计数：相位只取 [0]，sof 每帧清零
+    reg [AW-1:0] col_cnt;                   // 列计数：相位取 [0]
 
     wire fire = in_valid && in_ready;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            row_p   <= 1'b0;
+            row_cnt <= {RW{1'b0}};
             col_cnt <= {AW{1'b0}};
         end
         else if (fire) begin
             if (in_sof) begin
-                row_p   <= 1'b0;              // 新帧从行 0 开始
-                col_cnt <= {{(AW-1){1'b0}}, 1'b1};  // 本拍是 (0,0)，下一拍是 (0,1)
+                row_cnt <= {RW{1'b0}};              // 新帧从行 0 开始
+                col_cnt <= {{(AW-1){1'b0}}, 1'b1};  // `col_cnt <= 1` 不是“当前拍是第 1 列”，而是“ 下一拍 是第 1 列”
             end
             else if (in_eol) begin
-                row_p   <= ~row_p;            // 行末：下一拍是新行第 0 列
-                col_cnt <= {AW{1'b0}};
+                col_cnt <= {AW{1'b0}};              // 行末：下一拍是新行第 0 列
+                row_cnt <= row_cnt + 1'b1;
             end
             else begin
                 col_cnt <= (col_cnt == IMG_W - 1) ? {AW{1'b0}} : (col_cnt + 1'b1);
-                // 列回绕双保险：eol 偶发丢失时 1 行内自愈（正常流 eol 先到，两者一致）
             end
         end
     end
@@ -100,7 +104,7 @@ module blc_core #(
     reg [DW-1:0] ob_sel;
     reg [1:0]    ph_cur;
     always @(*) begin
-        ph_cur = in_sof ? 2'b00 : {row_p, col_cnt[0]};
+        ph_cur = in_sof ? 2'b00 : {row_cnt[0], col_cnt[0]};
         case (ph_cur)
             2'b00: ob_sel = ob_00;
             2'b01: ob_sel = ob_01;
