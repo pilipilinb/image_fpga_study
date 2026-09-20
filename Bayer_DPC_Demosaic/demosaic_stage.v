@@ -4,7 +4,9 @@
 // 与 dpc_stage.v 完全同构（行缓存/相位/反压结构一致），差别只在核与输出：
 //   核：demosaic_bilinear_dw / demosaic_mhc_dw 二选一（DEMOSAIC_SEL 参数，
 //       两核接口一致，"换核不改线"——沿用 Demosaic 工程的结论）
-//   输出：out_data = {r, g, b} 打包 3*DW（RAW10 域 RGB，折 8bit 留给后级/显示前）
+//   输出：out_data = {r, g, b} 打包 3*OW（默认 OW=DW=10：线性 RGB 域保持 10bit 直通，
+//         位宽缩减统一推迟到后级 Gamma 出口的 1024×8 LUT——LUT 预存 round 值零成本无偏置；
+//         仅当本模块是最终显示出口时才设 OW=8 折 24bit）
 // 相位：与 dpc_stage 相同，窗口输出侧自算（out_sof/out_eol 驱动光栅计数器），
 //   不吃上游传来的像素相位——经过 5×5 行缓存后窗口中心相位 = 输入相位延迟
 //   K*(W+1) 个有效拍，自算比延迟链干净且任意反压/气泡下严格对齐。
@@ -19,8 +21,10 @@
 
 module demosaic_stage #(
     parameter DW           = 10,
-    parameter OW           = 8,      // 输出通道位宽：RGB888 契约（3*8=24bit，对齐 VDMA S2MM tdata[23:0]）
-                                     //   RAW10→8bit 在出口 >>2 折算（显示域）；OW=DW 时直通不折算
+    parameter OW           = 10,     // 输出通道位宽：默认 = DW（线性 RGB 域保持 10bit 直通，
+                                     //   位宽缩减统一推迟到后级 Gamma 出口的 1024×8 LUT，
+                                     //   LUT 预存 round 值 = 零成本无偏置折算）。
+                                     //   仅当本模块就是最终显示出口时才设 OW=8（出口 >>2 折算）。
     parameter IMG_W        = 640,
     parameter IMG_H        = 480,
     parameter N            = 5,
@@ -29,15 +33,15 @@ module demosaic_stage #(
     input  wire          clk,
     input  wire          rst_n,
     // ---- 入侧简流（DPC 出，Bayer 域 RAW10）----
-    input  wire          in_valid,
-    output wire          in_ready,
+    input  wire          in_valid, //上级给的
+    output wire          in_ready, //返回给上级
     input  wire [DW-1:0] in_data,
     input  wire          in_sof,
     input  wire          in_eol,
-    // ---- 出侧简流（RGB 域，{r,g,b} 打包 3*OW）----
-    output wire          out_valid,
-    input  wire          out_ready,
-    output wire [3*OW-1:0] out_data,  // {r, g, b}，各 OW 位（RGB888 = 24bit）
+    // ---- 出侧简流（线性 RGB 域，{r,g,b} 打包 3*OW）----
+    output wire          out_valid,//输出给下级
+    input  wire          out_ready, //下级提供
+    output wire [3*OW-1:0] out_data,  // {r, g, b}，各 OW 位（链路内 3*10=30bit；终显 OW=8 → 24bit）
     output wire          out_sof,
     output wire          out_eol,
     output wire [1:0]    out_phase
@@ -135,6 +139,12 @@ module demosaic_stage #(
     // RAW10 → RGB888 出口折算：核内保持 DW=10bit 精度插值（中间不加噪），
     //   显示域出口 >>2 截断（1023→255）。OW=DW 时移位量为 0 直通。
     //   三通道同移位 → {r,g,b} 同拍打包，无对齐问题。
+    // 【截断 vs 四舍五入（偏置分析，面试点）】截断误差 ∈{0,0.25,0.5,0.75}LSB →
+    //   均值偏置 -0.375LSB（全图偏暗 0.15%），方差 0.078；四舍五入(+2>>2) 无偏置、
+    //   方差 0.083 —— 两者 PSNR 差 <0.05dB，本处选截断：与 Python 参考逐位一致、
+    //   零资源，且偏置会被后级 Gamma LUT 重映射吸收。何时必须 round：多级缩放链
+    //   （防偏置累积，本工程先例 MeanFilter 的 (sum×57+256)>>9）与 AE/直方图等
+    //   对均值敏感的统计入口。
     generate
         if (OW == DW) begin : g_ow_direct
             assign out_data = {r_c, g_c, b_c};

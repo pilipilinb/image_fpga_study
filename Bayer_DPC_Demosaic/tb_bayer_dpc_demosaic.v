@@ -29,7 +29,8 @@ module tb_bayer_dpc_demosaic;
 `endif
 
     localparam DW     = 10;
-    localparam OW     = 8;                 // 出侧通道位宽：RGB888（out_data[23:0]）
+    localparam OW     = 10;                // 出侧通道位宽：线性 RGB 域保持 10bit（3*OW=30bit）；
+                                           //   位宽缩减统一在 Gamma 出口（M4）
     localparam TOTAL  = IMG_W * IMG_H;
 `ifdef IMG
     localparam NFRAME = 1;

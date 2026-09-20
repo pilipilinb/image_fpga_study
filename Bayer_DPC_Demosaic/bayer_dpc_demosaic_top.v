@@ -3,7 +3,8 @@
 //
 // 数据流：
 //   BLC 出（Bayer RAW10 简流）─► dpc_stage（5×5 包络检测坏点校正）─► demosaic_stage
-//   （5×5 双线性/MHC 去马赛克）─► RGB 简流 {r,g,b} 3*DW
+//   （5×5 双线性/MHC 去马赛克）─► 线性 RGB 简流 out_data[29:0]（{r,g,b} 各 10bit，
+//   位宽缩减统一推迟到后级 Gamma 出口的 1024×8 LUT，LUT 预存 round 值）
 //
 // 两级各自内含 line_buffer_fifo_nxn(N=5)——行缓存是"每级一份"而不是共享：
 //   DPC 和 Demosaic 的窗口中心错开 K*(W+1) 个有效拍，共享一份行缓存需要额外的
@@ -20,7 +21,8 @@
 
 module bayer_dpc_demosaic_top #(
     parameter DW           = 10,     // 入侧像素位宽（Bayer RAW10）
-    parameter OW           = 8,      // 出侧通道位宽（RGB888 契约：out_data[23:0]）
+    parameter OW           = 10,     // 出侧通道位宽：链路内保持 10bit（3*OW=30bit），
+                                     //   位宽缩减统一在 Gamma 出口（M4，1024×8 LUT 预存 round 值）
     parameter IMG_W        = 640,
     parameter IMG_H        = 480,
     parameter N            = 5,
@@ -35,7 +37,7 @@ module bayer_dpc_demosaic_top #(
     input  wire [DW-1:0] in_data,
     input  wire          in_sof,
     input  wire          in_eol,
-    // ---- 出侧简流（RGB888，{r,g,b} 打包 3*OW=24bit）----
+    // ---- 出侧简流（线性 RGB 域，{r,g,b} 打包 3*OW=30bit）----
     output wire          out_valid,
     input  wire          out_ready,
     output wire [3*OW-1:0] out_data,

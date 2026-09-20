@@ -169,11 +169,11 @@ CSI-2 RX ─AXIS─► [AXIS 适配 + 入端弹性 FIFO]
 |---|---|---|---|---|
 | BLC 黑电平校正 | Bayer | RAW → RAW | 无（逐像素减偏置，每通道一个偏置） | ✅ 已实现（Month-2 M2：双形态双判据 0 误差；图像链 PSNR 不校 19.47dB → 校准 inf / 校偏 36.12dB） |
 | DPC 坏点校正 | Bayer | RAW → RAW | 5×5 窗口 | ✅ 新链路版（Month-2 M3：`dpc_envelope_dw.v` DW 参数化 + 简流反压；RAW10 注 60 坏点 28.33→38.84dB；8bit 旧版 26.43→31.91dB） |
-| Demosaic 去马赛克 | Bayer → RGB | RAW10 → **RGB888**（出口 >>2 折算） | 5×5 窗口 | ✅ 新链路版（Month-2 M3：双线性/MHC 双核 DW 参数化换核不改线，`out_data[23:0]` 对齐 VDMA 契约；RGB888 域 DPC 后 40.37dB；8bit 旧版 26.05/29.23dB） |
+| Demosaic 去马赛克 | Bayer → RGB | RAW10 → RGB(3×10bit)（线性域直通，缩减在 Gamma 出口） | 5×5 窗口 | ✅ 新链路版（Month-2 M3：双线性/MHC 双核 DW 参数化换核不改线；RGB 域 10bit 口径 DPC 后 40.38dB；8bit 旧版 26.05/29.23dB） |
 | 降噪 | RGB | RGB → RGB | 3×3 窗口 | 已有三套可选（均值/高斯/中值；椒盐场景中值 26.18 dB 最优） |
 | AWB 自动白平衡 | RGB | RGB → RGB | **帧级统计** + 增益 | 未实现（统计 R/G/B 均值 → 增益，需帧级统计 + 增益延迟一帧生效） |
 | CCM 色彩校正矩阵 | RGB | RGB → RGB | 无（3×3 矩阵乘） | 未实现（唯一必须用乘法器/DSP 的一级） |
-| Gamma 伽马校正 | RGB | RGB → RGB | 无（LUT） | 未实现（256×10bit 表放 BRAM，Microblaze 写表） |
+| Gamma 伽马校正 | RGB | RGB → RGB | 无（LUT） | 未实现（M4 计划：**1024×8bit LUT**，10bit 进 8bit 出——全链位宽缩减统一在此出口，LUT 内容 Microblaze 预存 round 值实现零偏置折算） |
 | 锐化 | RGB | RGB → RGB | 3×3 窗口 | 未实现（USM：原图 + 高频×强度，可复滤波的行缓存） |
 
 **顺序的依据**：BLC/DPC **必须在 Demosaic 之前**——它们处理的是"每个像素只有一个颜色"的 Bayer 数据，坏点若留到 Demosaic 之后会被插值扩散成刺眼的彩色斑点；AWB/CCM/Gamma/锐化 **必须在 Demosaic 之后**——它们需要 RGB 三通道齐全。
@@ -524,7 +524,7 @@ RGB888 图像按**整数倍缩放**（`OUT = IN × SCALE_N / SCALE_D`，分子=�
 
 ### BAYER_DPC_DEMOSAIC · DPC→Demosaic 串联链（M3，Bayer 域 RAW10）
 
-ISP 第三/四级串联：**坏点校正 → 去马赛克**。输入 Bayer RAW10 简流，输出 **RGB888**（`out_data[23:0]`，对齐 VDMA `tdata[23:0]` 契约；RAW10→8bit 在 Demosaic 出口 `>>2` 折算，`OW` 参数化）。算法核来自已验证的 `DPC/`、`Demosaic/` 工程（8bit 版），**算法逻辑零改动**，仅位宽参数化（8→DW）+ 接口适配（简流握手 + `line_buffer_fifo_nxn` pad 全尺寸 + 反压）。两级各自内含一份行缓存（窗口中心错开 K×(W+1) 个有效拍，共享不划算）。
+ISP 第三/四级串联：**坏点校正 → 去马赛克**。输入 Bayer RAW10 简流，输出**线性 RGB**（`out_data[29:0]` = {r,g,b} 各 10bit）——**位宽缩减统一推迟到 Gamma 出口**（M4 的 1024×8 LUT，内容预存 round 值零成本无偏置；VDMA 契约 `tdata[23:0]` 由 Gamma 出口给出），线性 RGB 域（降噪/AWB/CCM）全程 10bit 零中间量化。算法核来自已验证的 `DPC/`、`Demosaic/` 工程（8bit 版），**算法逻辑零改动**，仅位宽参数化（8→DW）+ 接口适配（简流握手 + `line_buffer_fifo_nxn` pad 全尺寸 + 反压）。两级各自内含一份行缓存（窗口中心错开 K×(W+1) 个有效拍，共享不划算）。
 
 | 文件 | 说明 |
 |---|---|
@@ -535,17 +535,17 @@ ISP 第三/四级串联：**坏点校正 → 去马赛克**。输入 Bayer RAW10
 
 **验证（四套 TB 全 PASS）**：双线性/MHC × 协议/图像，全部期望比对 0 误差 + 出侧稳定性断言零违例 + 收发计数一致（960/960、11536/11536）。
 
-**PSNR（Bayer 域 RAW10 / RGB888 域，THR=128，注 60 坏点）**：
+**PSNR（Bayer 域 / 线性 RGB 域均 10bit，THR=128，注 60 坏点）**：
 
 | 口径 | 无 DPC | DPC 后 | 提升 |
 |---|---|---|---|
 | Bayer 域（10bit） | 28.33 dB | **38.84 dB** | +10.51 dB |
-| RGB888 域·双线性 | 30.28 dB | **40.37 dB** | +10.09 dB |
-| RGB888 域·MHC | — | 32.60 dB | — |
+| RGB 域·双线性 | 30.30 dB | **40.38 dB** | +10.08 dB |
+| RGB 域·MHC | — | 32.64 dB | — |
 
 → 坏点链上 **MHC 反而低于双线性**（无坏点时 MHC 更锐）——MHC 的高通细节项会放大 DPC 残留（漏网/边缘误伤），双线性的平均将其抹平。对比图 [dpc_demosaic_compare.png](Bayer_DPC_Demosaic/dpc_demosaic_compare.png)。
 
-关键设计/踩坑：① **`hold_in` 保持**——"LAT=1 核直接当输出寄存器"必须配保持语义，否则行缓存弹出（滞后一拍的 ostall 决策）与下游取走之间的时序差会丢数（TB 断言海量"valid 未 ready 撤销"实锤）；② 窗口相位自算（光栅序计数器）替代"输入相位打 K 拍延迟链"，任意反压/气泡严格对齐；③ 跨帧语义 = 行缓存帧间排空 → 每帧独立（clamp 窗口）；④ pad 版边缘窗口用 replicate 像素参与判定（旧 crop 版直接不输出边缘）。
+关键设计/踩坑：① **`hold_in` 保持**——"LAT=1 核直接当输出寄存器"必须配保持语义，否则行缓存弹出（滞后一拍的 ostall 决策）与下游取走之间的时序差会丢数（TB 断言海量"valid 未 ready 撤销"实锤）；② 窗口相位自算（光栅序计数器）替代"输入相位打 K 拍延迟链"，任意反压/气泡严格对齐；③ 跨帧语义 = 行缓存帧间排空 → 每帧独立（clamp 窗口）；④ pad 版边缘窗口用 replicate 像素参与判定（旧 crop 版直接不输出边缘）；⑤ **线性 RGB 域全程 10bit，位宽缩减统一推迟到 Gamma 出口**（1024×8 LUT 预存 round 值零成本无偏置）——若在 Demosaic 出口就地 `>>2` 截断会有 −0.375LSB 直流偏置（方差与 round 几乎相同、PSNR 差 <0.05dB，但多级链偏置累积、AE/直方图对均值敏感；中间级截断先例 MeanFilter `+256` 才是 round）。
 
 文档：[Bayer_DPC_Demosaic/README.md](Bayer_DPC_Demosaic/README.md)
 

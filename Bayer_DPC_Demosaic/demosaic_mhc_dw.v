@@ -23,7 +23,7 @@ module demosaic_mhc_dw #(
     input  [25*DW-1:0]  win_flat,     // 5×5 窗口（25×DW 打包，(行*5+列)*DW）
     input  [1:0]        phase,        // 中心相位：00=R 01=Gr 10=Gb 11=B
     input               valid_in,
-    input               hold_in,      // = 下级 ostall：1 时输出寄存器保持（简流稳定性）
+    input               hold_in,      // 反压触发，=1时 下级没准备好，此时输出寄存器保持（简流稳定性）
     output reg  [DW-1:0] r_out,
     output reg  [DW-1:0] g_out,
     output reg  [DW-1:0] b_out,
