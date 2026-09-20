@@ -19,6 +19,8 @@
 
 module demosaic_stage #(
     parameter DW           = 10,
+    parameter OW           = 8,      // 输出通道位宽：RGB888 契约（3*8=24bit，对齐 VDMA S2MM tdata[23:0]）
+                                     //   RAW10→8bit 在出口 >>2 折算（显示域）；OW=DW 时直通不折算
     parameter IMG_W        = 640,
     parameter IMG_H        = 480,
     parameter N            = 5,
@@ -26,16 +28,16 @@ module demosaic_stage #(
 )(
     input  wire          clk,
     input  wire          rst_n,
-    // ---- 入侧简流（DPC 出，Bayer 域）----
+    // ---- 入侧简流（DPC 出，Bayer 域 RAW10）----
     input  wire          in_valid,
     output wire          in_ready,
     input  wire [DW-1:0] in_data,
     input  wire          in_sof,
     input  wire          in_eol,
-    // ---- 出侧简流（RGB 域，{r,g,b} 打包）----
+    // ---- 出侧简流（RGB 域，{r,g,b} 打包 3*OW）----
     output wire          out_valid,
     input  wire          out_ready,
-    output wire [3*DW-1:0] out_data,   // {r, g, b}，各 DW 位
+    output wire [3*OW-1:0] out_data,  // {r, g, b}，各 OW 位（RGB888 = 24bit）
     output wire          out_sof,
     output wire          out_eol,
     output wire [1:0]    out_phase
@@ -130,7 +132,16 @@ module demosaic_stage #(
     end
 
     assign out_valid = dm_valid;
-    assign out_data  = {r_c, g_c, b_c};
+    // RAW10 → RGB888 出口折算：核内保持 DW=10bit 精度插值（中间不加噪），
+    //   显示域出口 >>2 截断（1023→255）。OW=DW 时移位量为 0 直通。
+    //   三通道同移位 → {r,g,b} 同拍打包，无对齐问题。
+    generate
+        if (OW == DW) begin : g_ow_direct
+            assign out_data = {r_c, g_c, b_c};
+        end else begin : g_ow_fold
+            assign out_data = {r_c[DW-1:DW-OW], g_c[DW-1:DW-OW], b_c[DW-1:DW-OW]};
+        end
+    endgenerate
     assign out_sof   = sof_r;
     assign out_eol   = eol_r;
     assign out_phase = ph_r;

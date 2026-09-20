@@ -56,11 +56,17 @@ def load_hex(path):
     return [int(l.strip(), 16) for l in open(path) if l.strip()]
 
 
-def save_hex30(px, path):
-    """期望 RGB：{r[9:0], g[9:0], b[9:0]} 拼 30bit hex（与 RTL out_data 打包一致）"""
+def save_exp_hex(px, path):
+    """期望 RGB888：{r,g,b} 各 8bit 拼 24bit hex（与 RTL out_data[23:0] 打包一致）"""
     with open(path, 'w') as f:
         for p in px:
-            f.write(f'{p:08X}\n')
+            f.write(f'{p:06X}\n')
+
+
+def to_rgb888(p):
+    """10bit 打包 {r,g,b} → RGB888 打包（出口 >>2 截断，与 RTL OW=8 折算位级同构）"""
+    r, g, b = (p >> 20) & MAXV, (p >> 10) & MAXV, p & MAXV
+    return ((r >> 2) << 16) | ((g >> 2) << 8) | (b >> 2)
 
 
 def ch(px, k):
@@ -156,13 +162,16 @@ def demosaic_mhc_ref(bayer, w, h):
 
 
 def psnr(a, b, nch=1):
-    """a/b：打包值。nch=1（Bayer 单通道 10bit）或 3（RGB 三通道各 10bit）"""
+    """a/b：nch=1 → 裸 10bit 值列表（Bayer，MAX=1023）；nch=3 → RGB888 8bit 打包（MAX=255）"""
+    maxv = MAXV if nch == 1 else 255
+    sh0 = 0 if nch == 1 else 16          # nch=1 裸值在 bit0 起；nch=3 打包 r 在 bit16 起
+    step = 10 if nch == 1 else 8
     mse, n = 0, len(a) * nch
     for x, y in zip(a, b):
         for k in range(nch):
-            sh = 20 - 10 * k if nch == 3 else 0
-            mse += (((x >> sh) & MAXV) - ((y >> sh) & MAXV)) ** 2
-    return 10 * math.log10(MAXV * MAXV * n / mse) if mse > 0 else float('inf')
+            sh = sh0 - step * k
+            mse += (((x >> sh) & maxv) - ((y >> sh) & maxv)) ** 2
+    return 10 * math.log10(maxv * maxv * n / mse) if mse > 0 else float('inf')
 
 
 def gray_img_bayer(px, w, h):
@@ -172,8 +181,9 @@ def gray_img_bayer(px, w, h):
 
 
 def rgb_img(px, w, h):
+    """输入 RGB888 打包（8bit 各通道），直接取字节"""
     img = Image.new('RGB', (w, h))
-    img.putdata([(((p >> 20) & MAXV) >> 2, ((p >> 10) & MAXV) >> 2, (p & MAXV) >> 2) for p in px])
+    img.putdata([((p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF) for p in px])
     return img
 
 
@@ -189,14 +199,15 @@ def main():
         w, h, frames = W_SMALL, H_SMALL, FRAMES
         bayer = gen_small_frame_input()               # 无黑电平无坏点（协议场景）
         # 行缓存在帧间排空（M1 已验证）→ 每帧独立处理（clamp replicate），与 RTL 一致
+        # 出口折 RGB888（10bit 打包 → to_rgb888），与 RTL OW=8 位级同构
         exp_bl, exp_mhc = [], []
         for f_i in range(frames):
             fr = bayer[f_i * w * h:(f_i + 1) * w * h]
-            exp_bl += demosaic_bilinear_ref(fr, w, h)
-            exp_mhc += demosaic_mhc_ref(fr, w, h)
-        save_hex30(exp_bl, 'exp_rgb_small_bilinear.hex')
-        save_hex30(exp_mhc, 'exp_rgb_small_mhc.hex')
-        print(f'OK small: 期望 {frames} 帧 × {w * h} 像素 → exp_rgb_small_bilinear/mhc.hex')
+            exp_bl += [to_rgb888(p) for p in demosaic_bilinear_ref(fr, w, h)]
+            exp_mhc += [to_rgb888(p) for p in demosaic_mhc_ref(fr, w, h)]
+        save_exp_hex(exp_bl, 'exp_rgb_small_bilinear.hex')
+        save_exp_hex(exp_mhc, 'exp_rgb_small_mhc.hex')
+        print(f'OK small: 期望 {frames} 帧 × {w * h} 像素（RGB888）→ exp_rgb_small_bilinear/mhc.hex')
         return
 
     # ---------------- img 模式：真图 + BLC + 坏点 ----------------
@@ -230,23 +241,23 @@ def main():
         for v in defect:
             f.write(f'{v:03X}\n')
 
-    # Python 参考链
+    # Python 参考链（核内 10bit 精度计算，出口折 RGB888）
     dpc_out = dpc_ref(defect, W_IMG, H_IMG)
-    exp_bl = demosaic_bilinear_ref(dpc_out, W_IMG, H_IMG)
-    exp_mhc = demosaic_mhc_ref(dpc_out, W_IMG, H_IMG)
-    no_dpc = demosaic_bilinear_ref(defect, W_IMG, H_IMG)          # 无 DPC 对照（坏点直接去马赛克）
-    clean_dm = demosaic_bilinear_ref(after_blc, W_IMG, H_IMG)     # 干净基准（无坏点直接 Demosaic）
-    save_hex30(exp_bl, 'exp_rgb_img_bilinear.hex')
-    save_hex30(exp_mhc, 'exp_rgb_img_mhc.hex')
+    exp_bl = [to_rgb888(p) for p in demosaic_bilinear_ref(dpc_out, W_IMG, H_IMG)]
+    exp_mhc = [to_rgb888(p) for p in demosaic_mhc_ref(dpc_out, W_IMG, H_IMG)]
+    no_dpc = [to_rgb888(p) for p in demosaic_bilinear_ref(defect, W_IMG, H_IMG)]      # 无 DPC 对照
+    clean_dm = [to_rgb888(p) for p in demosaic_bilinear_ref(after_blc, W_IMG, H_IMG)] # 干净基准
+    save_exp_hex(exp_bl, 'exp_rgb_img_bilinear.hex')
+    save_exp_hex(exp_mhc, 'exp_rgb_img_mhc.hex')
 
-    # PSNR（Bayer 域 + RGB 域，MAX=1023）
+    # PSNR：Bayer 域 10bit（MAX=1023）；RGB 域 RGB888 8bit（MAX=255）
     print('========================================')
-    print(f'注入 {N_DEFECT} 个坏点（亮点/死点各半，seed={SEED}），THR={THR}（RAW10）')
+    print(f'注入 {N_DEFECT} 个坏点（亮点/死点各半，seed={SEED}），THR={THR}（RAW10），出口 RGB888')
     print(f'[Bayer 域] 坏点图 vs 干净(BLC后) : {psnr(defect, after_blc):7.2f} dB')
     print(f'[Bayer 域] DPC 后   vs 干净      : {psnr(dpc_out, after_blc):7.2f} dB')
-    print(f'[RGB 域]   坏点直接Demosaic      : {psnr(no_dpc, clean_dm, 3):7.2f} dB（无 DPC）')
-    print(f'[RGB 域]   DPC+Demosaic(bilinear): {psnr(exp_bl, clean_dm, 3):7.2f} dB')
-    print(f'[RGB 域]   DPC+Demosaic(MHC)     : {psnr(exp_mhc, clean_dm, 3):7.2f} dB')
+    print(f'[RGB888]   坏点直接Demosaic      : {psnr(no_dpc, clean_dm, 3):7.2f} dB（无 DPC）')
+    print(f'[RGB888]   DPC+Demosaic(bilinear): {psnr(exp_bl, clean_dm, 3):7.2f} dB')
+    print(f'[RGB888]   DPC+Demosaic(MHC)     : {psnr(exp_mhc, clean_dm, 3):7.2f} dB')
     print('========================================')
 
     # 对比图：上排 Bayer 灰度（干净/坏点/DPC 后），下排 RGB（干净 DM / 坏点无 DPC / RTL 链 bilinear）

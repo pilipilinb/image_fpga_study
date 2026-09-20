@@ -169,7 +169,7 @@ CSI-2 RX ─AXIS─► [AXIS 适配 + 入端弹性 FIFO]
 |---|---|---|---|---|
 | BLC 黑电平校正 | Bayer | RAW → RAW | 无（逐像素减偏置，每通道一个偏置） | ✅ 已实现（Month-2 M2：双形态双判据 0 误差；图像链 PSNR 不校 19.47dB → 校准 inf / 校偏 36.12dB） |
 | DPC 坏点校正 | Bayer | RAW → RAW | 5×5 窗口 | ✅ 新链路版（Month-2 M3：`dpc_envelope_dw.v` DW 参数化 + 简流反压；RAW10 注 60 坏点 28.33→38.84dB；8bit 旧版 26.43→31.91dB） |
-| Demosaic 去马赛克 | Bayer → RGB | RAW → RGB(3×DW) | 5×5 窗口 | ✅ 新链路版（Month-2 M3：双线性/MHC 双核 DW 参数化，换核不改线；RAW10 干净图基准下双线性 40.38dB；8bit 旧版 26.05/29.23dB） |
+| Demosaic 去马赛克 | Bayer → RGB | RAW10 → **RGB888**（出口 >>2 折算） | 5×5 窗口 | ✅ 新链路版（Month-2 M3：双线性/MHC 双核 DW 参数化换核不改线，`out_data[23:0]` 对齐 VDMA 契约；RGB888 域 DPC 后 40.37dB；8bit 旧版 26.05/29.23dB） |
 | 降噪 | RGB | RGB → RGB | 3×3 窗口 | 已有三套可选（均值/高斯/中值；椒盐场景中值 26.18 dB 最优） |
 | AWB 自动白平衡 | RGB | RGB → RGB | **帧级统计** + 增益 | 未实现（统计 R/G/B 均值 → 增益，需帧级统计 + 增益延迟一帧生效） |
 | CCM 色彩校正矩阵 | RGB | RGB → RGB | 无（3×3 矩阵乘） | 未实现（唯一必须用乘法器/DSP 的一级） |
@@ -524,7 +524,7 @@ RGB888 图像按**整数倍缩放**（`OUT = IN × SCALE_N / SCALE_D`，分子=�
 
 ### BAYER_DPC_DEMOSAIC · DPC→Demosaic 串联链（M3，Bayer 域 RAW10）
 
-ISP 第三/四级串联：**坏点校正 → 去马赛克**。算法核来自已验证的 `DPC/`、`Demosaic/` 工程（8bit 版），**算法逻辑零改动**，仅位宽参数化（8→DW）+ 接口适配（简流握手 + `line_buffer_fifo_nxn` pad 全尺寸 + 反压）。两级各自内含一份行缓存（窗口中心错开 K×(W+1) 个有效拍，共享不划算）。
+ISP 第三/四级串联：**坏点校正 → 去马赛克**。输入 Bayer RAW10 简流，输出 **RGB888**（`out_data[23:0]`，对齐 VDMA `tdata[23:0]` 契约；RAW10→8bit 在 Demosaic 出口 `>>2` 折算，`OW` 参数化）。算法核来自已验证的 `DPC/`、`Demosaic/` 工程（8bit 版），**算法逻辑零改动**，仅位宽参数化（8→DW）+ 接口适配（简流握手 + `line_buffer_fifo_nxn` pad 全尺寸 + 反压）。两级各自内含一份行缓存（窗口中心错开 K×(W+1) 个有效拍，共享不划算）。
 
 | 文件 | 说明 |
 |---|---|
@@ -535,13 +535,13 @@ ISP 第三/四级串联：**坏点校正 → 去马赛克**。算法核来自已
 
 **验证（四套 TB 全 PASS）**：双线性/MHC × 协议/图像，全部期望比对 0 误差 + 出侧稳定性断言零违例 + 收发计数一致（960/960、11536/11536）。
 
-**PSNR（RAW10，THR=128，注 60 坏点）**：
+**PSNR（Bayer 域 RAW10 / RGB888 域，THR=128，注 60 坏点）**：
 
 | 口径 | 无 DPC | DPC 后 | 提升 |
 |---|---|---|---|
-| Bayer 域 | 28.33 dB | **38.84 dB** | +10.51 dB |
-| RGB 域·双线性 | 30.30 dB | **40.38 dB** | +10.08 dB |
-| RGB 域·MHC | — | 32.64 dB | — |
+| Bayer 域（10bit） | 28.33 dB | **38.84 dB** | +10.51 dB |
+| RGB888 域·双线性 | 30.28 dB | **40.37 dB** | +10.09 dB |
+| RGB888 域·MHC | — | 32.60 dB | — |
 
 → 坏点链上 **MHC 反而低于双线性**（无坏点时 MHC 更锐）——MHC 的高通细节项会放大 DPC 残留（漏网/边缘误伤），双线性的平均将其抹平。对比图 [dpc_demosaic_compare.png](Bayer_DPC_Demosaic/dpc_demosaic_compare.png)。
 

@@ -19,7 +19,8 @@
 `include "demosaic_stage.v"
 
 module bayer_dpc_demosaic_top #(
-    parameter DW           = 10,
+    parameter DW           = 10,     // 入侧像素位宽（Bayer RAW10）
+    parameter OW           = 8,      // 出侧通道位宽（RGB888 契约：out_data[23:0]）
     parameter IMG_W        = 640,
     parameter IMG_H        = 480,
     parameter N            = 5,
@@ -34,10 +35,10 @@ module bayer_dpc_demosaic_top #(
     input  wire [DW-1:0] in_data,
     input  wire          in_sof,
     input  wire          in_eol,
-    // ---- 出侧简流（RGB，{r,g,b} 打包 3*DW）----
+    // ---- 出侧简流（RGB888，{r,g,b} 打包 3*OW=24bit）----
     output wire          out_valid,
     input  wire          out_ready,
-    output wire [3*DW-1:0] out_data,
+    output wire [3*OW-1:0] out_data,
     output wire          out_sof,
     output wire          out_eol,
     output wire [1:0]    out_phase
@@ -60,7 +61,7 @@ module bayer_dpc_demosaic_top #(
     );
 
     demosaic_stage #(
-        .DW(DW), .IMG_W(IMG_W), .IMG_H(IMG_H), .N(N), .DEMOSAIC_SEL(DEMOSAIC_SEL)
+        .DW(DW), .OW(OW), .IMG_W(IMG_W), .IMG_H(IMG_H), .N(N), .DEMOSAIC_SEL(DEMOSAIC_SEL)
     ) u_dm (
         .clk(clk), .rst_n(rst_n),
         .in_valid(c_valid), .in_ready(c_ready), .in_data(c_data),

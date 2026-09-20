@@ -29,6 +29,7 @@ module tb_bayer_dpc_demosaic;
 `endif
 
     localparam DW     = 10;
+    localparam OW     = 8;                 // 出侧通道位宽：RGB888（out_data[23:0]）
     localparam TOTAL  = IMG_W * IMG_H;
 `ifdef IMG
     localparam NFRAME = 1;
@@ -46,7 +47,7 @@ module tb_bayer_dpc_demosaic;
     wire          in_ready;
     wire          out_valid, out_sof, out_eol;
     wire          out_ready;                 // 由汇模型 assign 驱动
-    wire [3*DW-1:0] out_data;
+    wire [3*OW-1:0] out_data;                // RGB888 {r,g,b} 各 8bit
     wire [1:0]    out_phase;
 
     bayer_dpc_demosaic_top #(
@@ -133,8 +134,8 @@ module tb_bayer_dpc_demosaic;
     end
     assign out_ready = rdy_r;
 
-    // ---------------- 期望比对 ----------------
-    reg [3*DW-1:0] exp_mem [0:NFRAME*TOTAL-1];
+    // ---------------- 期望比对（RGB888：{r,g,b} 各 8bit，Python pack8 同构） ----------------
+    reg [3*OW-1:0] exp_mem [0:NFRAME*TOTAL-1];
     integer snd_cnt = 0, rcv_cnt = 0, err_cnt = 0;
     integer fd;
     initial fd = $fopen("dpc_dm_out.txt", "w");
@@ -160,7 +161,7 @@ module tb_bayer_dpc_demosaic;
 
     // ---------------- 断言：出侧稳定性 + 复位期 valid=0 ----------------
     reg          pv_ov, pv_or;
-    reg [3*DW-1:0] pv_od;
+    reg [3*OW-1:0] pv_od;
     reg          pv_os, pv_oe;
     reg [1:0]    pv_op;
     always @(posedge aclk or negedge aresetn) begin
