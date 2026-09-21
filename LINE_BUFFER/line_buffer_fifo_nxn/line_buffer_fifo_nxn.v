@@ -147,7 +147,15 @@ module line_buffer_fifo_nxn #(
     wire [DW-1:0] beat_pix = flush_fire ? fifo_dout_flat[0 +: DW]  // 造行：原地回写第 1 级输出
                                         : in_data;
     wire [31:0]   beat_idx = beat_sof ? 32'd1 : (beat_cnt + 32'd1);
-    wire emit_fire = shift_fire && (beat_idx >= START_BEAT) && (beat_idx <= END_BEAT);
+    // 【造行期发射判据（握手兼容修复）】造行注入拍（flush_fire）每拍必发一个窗口：
+    //   原判据 beat_idx∈[START,END] 依赖输入侧 beat_cnt 推进——握手型上游在造行期
+    //   （in_ready=0）挂起不发 → beat_cnt 冻结 → beat_idx 恒 = H*W → 帧末最后
+    //   K*W+K 个窗口全部不发射（丢 K*W+K 个，后续永久错位）。坐标本就由独立的
+    //   ocr/occ 计数器负责（与 beat_idx 无关），故造行期直接放行即可；
+    //   正常期仍用 beat_idx 区间判据（帧首 K*W+K 个 beat 无窗口）。
+    wire emit_fire = shift_fire &&
+                     (flush_fire ? 1'b1 :
+                      (beat_idx >= START_BEAT) && (beat_idx <= END_BEAT));
 
     // ========================================================================
     // 计数器与造行 FSM
