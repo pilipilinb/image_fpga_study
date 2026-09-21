@@ -28,6 +28,7 @@
   - [filter_csc_bilinear · 滤波+CSC+缩放 串链路（W4 收尾）](#filter_csc_bilinear--滤波csc缩放-串链路w4-收尾)
   - [BLC · 黑电平校正（M2，ISP 第一级）](#blc--黑电平校正m2isp-第一级)
   - [BAYER_DPC_DEMOSAIC · DPC→Demosaic 串联链（M3，Bayer 域 RAW10）](#bayer_dpc_demosaic--dpcdemosaic-串联链m3bayer-域-raw10)
+  - [BILATERALFILTER · 双边滤波降噪（M4-1，线性 RGB 域 10bit）](#bilateralfilter--双边滤波降噪m4-1线性-rgb-域-10bit)
 - [目录结构](#目录结构)
 - [快速开始](#快速开始)
 - [验证工具链](#验证工具链)
@@ -45,6 +46,7 @@
 | **手写 FIFO 基础件（fifo）** | 基础设施 | 双时钟 FIFO（对齐 FIFO Generator）+ AXIS Data FIFO（侧带打包 tuser/tlast）：跨域、速率匹配、链路首尾弹性缓冲 |
 | **黑电平校正（BLC）** | 逐像素点运算（ISP 第一级） | max(p−OB[相位], 0) 四通道饱和减；AXIS(RAW10) 入口 + 写法乙省位宽 + out_phase 直供后级 |
 | **DPC→Demosaic 串联链（M3）** | Bayer 域 5×5 窗口两级 | 算法核参数化复用旧工程 + 简流反压 + 窗口相位自算；DPC 后 Bayer 域 28.33→38.84dB（+10.51） |
+| **双边降噪（M4-1）** | 线性 RGB 域 3×3 窗口 | L1 值域核 LUT + 倒数 ROM 归一化 + 空间核移位（0 乘法器）；LAT=3；bypass 旁路（排空点切换）；边缘区 SSIM 优于高斯 |
 | **行缓存（LINE_BUFFER）** | 邻域运算地基 | N×N 窗口生成器，卷积/缩放/滤波的复用底座；含 FIFO 版（支持反压 + 可换 IP） |
 | **色彩空间转换（CSC）** | 逐像素点运算 | RGB → YCbCr（BT.601），1 对 1 映射，不需要行缓存 |
 | **双线性插值缩放（bilinear）** | 邻域运算 | 任意整数倍缩放（放大 N 倍 / 缩小 N 倍）；v3 整图 ROM 版 + v4 行缓存版（大图/实时视频） |
@@ -170,7 +172,7 @@ CSI-2 RX ─AXIS─► [AXIS 适配 + 入端弹性 FIFO]
 | BLC 黑电平校正 | Bayer | RAW → RAW | 无（逐像素减偏置，每通道一个偏置） | ✅ 已实现（Month-2 M2：双形态双判据 0 误差；图像链 PSNR 不校 19.47dB → 校准 inf / 校偏 36.12dB） |
 | DPC 坏点校正 | Bayer | RAW → RAW | 5×5 窗口 | ✅ 新链路版（Month-2 M3：`dpc_envelope_dw.v` DW 参数化 + 简流反压；RAW10 注 60 坏点 28.33→38.84dB；8bit 旧版 26.43→31.91dB） |
 | Demosaic 去马赛克 | Bayer → RGB | RAW10 → RGB(3×10bit)（线性域直通，缩减在 Gamma 出口） | 5×5 窗口 | ✅ 新链路版（Month-2 M3：双线性/MHC 双核 DW 参数化换核不改线；RGB 域 10bit 口径 DPC 后 40.38dB；8bit 旧版 26.05/29.23dB） |
-| 降噪 | RGB | RGB → RGB | 3×3 窗口 | 已有三套可选（均值/高斯/中值；椒盐场景中值 26.18 dB 最优） |
+| 降噪 | RGB | RGB → RGB | 3×3 窗口 | ✅ 新链路版（M4-1 `BilateralFilter/`：双边滤波 10bit 域 + bypass，位级 0 误差；PSNR 32.03dB / 边缘区 SSIM 0.9464 > 高斯 0.9453）。历史 8bit 三套可选（均值/高斯/中值）保留 |
 | AWB 自动白平衡 | **Bayer（RAW）** | RAW → RAW | **帧级统计**（按 R/Gr/Gb/B 相位分组）+ 增益应用 | 未实现（M6 最后做：增益应用级 = 与 blc_core 同构的相位选增益乘法，插 **DPC→Demosaic 之间**；统计级接 DPC 出，双 BRAM 乒乓"统计第 N 帧、增益第 N+1 帧生效"；软核闭环 MicroBlaze 裸机 C；M4/M5 期间 1.0 直通占位）。**WB 在去马赛克前** = 工业主流（Bayer 域每像素 1 次乘法省 3×、先平衡再插值伪彩少；对角阵 WB 必须在满阵 CCM 之前） |
 | CCM 色彩校正矩阵 | RGB | RGB → RGB | 无（3×3 矩阵乘） | 未实现（唯一必须用乘法器/DSP 的一级） |
 | Gamma 伽马校正 | RGB | RGB → RGB | 无（LUT） | 未实现（M4 计划：**1024×8bit LUT**，10bit 进 8bit 出——全链位宽缩减统一在此出口，LUT 内容 Microblaze 预存 round 值实现零偏置折算） |
@@ -213,7 +215,7 @@ CSI-2 RX ─AXIS─► [AXIS 适配 + 入端弹性 FIFO]
 | **M1** | `line_buffer_fifo_nxn`（FIFO 版 N×N，pad + 反压；双判据 0 误差，4 组参数含 640 宽图；稳态 1 pixel/clock） | ✅ 2026-09-18 |
 | **M2** | BLC（AXIS 适配 + 黑电平校正核，逐通道偏置） | ✅ 2026-09-19 |
 | **M3** | DPC→Demosaic 串联链（算法核参数化复用 + 简流反压 + hold_in 丢数修复；双核双判据 0 误差） | ✅ 2026-09-20 |
-| **M4** | 降噪 / CCM / Gamma（线性 RGB 域 10bit；AWB 位 1.0 直通占位） | ⬜ 下一步 |
+| **M4** | 降噪 ✅（双边，M4-1）→ CCM / Gamma（线性 RGB 域 10bit；AWB 位 1.0 直通占位） | 🔶 进行中 |
 | **M5** | 锐化 + 出端 AXIS 适配 + 8 级整链 | ⬜ |
 | **M6** | AWB 统计 + Bayer 域增益应用（插 DPC→Demosaic 之间）+ MicroBlaze 闭环——涉及软核交互放链路最后 | ⬜ |
 
@@ -567,6 +569,29 @@ ISP 第三/四级串联：**坏点校正 → 去马赛克**。
 
 文档：[Bayer_DPC_Demosaic/README.md](Bayer_DPC_Demosaic/README.md)
 
+### BILATERALFILTER · 双边滤波降噪（M4-1，线性 RGB 域 10bit）
+
+ISP 第五级。输入 = M3 出的线性 RGB 10bit 简流，输出同格式。算法来自 `工程要点.md`，8bit 数字按链路契约重推并补齐工程细节。
+
+- **算法**：`d = |ΔR|+|ΔG|+|ΔB|`（L1，免开方）→ 值域 LUT 查权重（6bit）→ 空间核 `[1 2 1;2 4 2;1 2 1]` 移位加权 → 倒数 ROM 归一化
+- **参数（10bit）**：σ_r **240**（★按噪声标定 σ_r≈4.9σ_n，非位宽等比）、CUT=747、值域 LUT 1024×6bit、倒数 ROM 1024×13bit、den∈[252,1008]、num 21bit
+- **流水**：LAT=3（T0 组合 d→LUT 异步读→加权；T1 num/den 寄存；T2 倒数 ROM 同步读★num 同拍打；T3 乘+round+移位+饱和）
+- **bypass**：数据经 `axis_stream_fifo`（M0.5）直通，处理路径冻结；**切换必须在链路排空点**（两路径延迟差 W+1 量级，禁止热切换）
+
+**验证**：协议 TB（16×12×5 帧四场景 + bypass 三段落）**[PASS]** 1536=1536；图像 TB（112×103 注噪 σ=48）**[PASS]** 11536/11536；Python 独立复算**位级全等 0 误差**（LUT/ROM 系数与 golden 同源生成）。
+
+| | PSNR(dB) | SSIM | 边缘区 PSNR | 边缘区 SSIM |
+|---|---|---|---|---|
+| 注噪图 | 26.51 | 0.7197 | 26.51 | 0.8738 |
+| 高斯降噪 | **32.74** | 0.9216 | **31.42** | 0.9453 |
+| 双边降噪（RTL） | 32.03 | 0.9039 | 31.06 | **0.9464** |
+
+→ 3×3 窗口 + 窄空间核下双边与高斯基本打平，**边缘区 SSIM 略胜**——双边"用少量平坦区降噪换边缘保真"的固有取舍；优势随窗口增大而显著。对比图 [denoise_compare.png](BilateralFilter/denoise_compare.png)。
+
+**踩坑（三条，均实证）**：① `in_ready` **双驱动成 X**——stage 的 assign 与行缓存输出端口接到同一 wire，造行期 0 vs 1 冲突 → 握手型上游被 X 挂死数万拍（M1 TB 源不握手，掩盖了这个接口缺陷）；② bypass 与处理路径**延迟不等**（FIFO 4 拍 vs 行缓存 K·W+K+3），帧中间热切换必错位 → 改排空点切换；③ **σ_r 标定失配**——照抄 8bit ×4=120 只适合 σ_n=24，注入 σ_n=48 时值域核过窄，PSNR 反低于高斯 3.5dB → 按 σ_r≈4.9σ_n 重标定 240。
+
+文档：[BilateralFilter/README.md](BilateralFilter/README.md) · 计划 [双边滤波实现计划.md](BilateralFilter/双边滤波实现计划.md)
+
 ---
 
 ## 目录结构
@@ -639,6 +664,13 @@ image_fpga_study/
 │   ├── tb_bayer_dpc_demosaic.v / make_dpc_demosaic_data.py
 │   ├── dpc_demosaic_compare.png
 │   └── README.md
+├── BilateralFilter/           # M4-1 双边滤波降噪（线性 RGB 域 10bit + bypass 旁路）
+│   ├── denoise_bilateral_core.v / denoise_stage.v
+│   ├── tb_denoise_bilateral.v
+│   ├── make_denoise_data.py / verify_denoise.py
+│   ├── range_lut.coe / inv_rom.coe
+│   ├── denoise_compare.png
+│   ├── 工程要点.md / 双边滤波实现计划.md / README.md
 └── README.md                  # 本文档
 ```
 
@@ -750,6 +782,9 @@ vvp tb_i_b.vvp > sim_log_i_b.txt                           # 图像 TB（-DMHC �
 - **BRAM pad 版行缓存 `line_buffer_nxn_pad` 已弃用**：其 `row_cnt/col_cnt` 复位用了裸 `din_sof`（未与 valid 门控），首个 beat 的计数被复位吃掉 → 帧末造行触发条件永不满足（自身 TB 亦超时）。后续行缓存统一用 `line_buffer_fifo_nxn`（支持反压 + 可换 IP）
 - **Demosaic / DPC 旧源码曾被清空**：8bit 旧版已从备份恢复（`DPC/`、`Demosaic/`，历史指标 DPC 26.43→31.91dB；双线性 26.05 / MHC 29.23dB）；Month-2 M3 已在其基础上完成 DW 参数化 + 简流反压新链路（`Bayer_DPC_Demosaic/`），RAW10 域新指标见其 README
 - **给无守卫文件补 include 守卫时的连带修改**：`async_fifo.v` 加守卫后，`fwft_wrapper.v` 里旧的"`define ASYNC_FIFO_V_INC` 再 include"写法会把整个 async_fifo 内容屏蔽（宏已置位）→ 必须删掉这个过时 define，直接 include（靠 async_fifo 自带守卫防重复）
+- **`in_ready` 双驱动成 X（M4-1 实锤，隐蔽性极高）**：子模块的 `in_ready` **输出**端口接到 wire 后，上层若又对该 wire `assign`（如 `in_ready = lb_ready && byp_ready`），造行/反压期两者值不同（0 vs 1）→ 冲突成 X → 握手型上游被 X 挂死数万拍。**修法**：子模块输出接**独立 wire**（`lb_inready`）参与运算。注意：不握手的 TB 源会掩盖此缺陷（M1 的 TB 就掩盖了），M3 因无 bypass 恰好未触发
+- **bypass 旁路不能"等延迟"实现**：bypass 路径（FIFO 4 拍）与处理路径（行缓存 K·W+K + 核 LAT）延迟差 W+1 像素量级，帧中间热切换必然错位 → 必须**在链路排空点切换**（停源 → 等出口清空 → 切换 → 再发），即 bypass 是帧级配置
+- **σ_r（值域核宽度）必须与噪声一起标定，不能只做位宽等比**：σ_r ≈ 4.9σ_n（L1 量纲下 ≈1.44×E[d]）。照抄 8bit 的 30 ×4 = 120 只适合 σ_n=24；注入 σ_n=48 时值域核过窄、中心权重过大 → 降噪不足（PSNR 反低于高斯 3.5dB）
 
 ---
 

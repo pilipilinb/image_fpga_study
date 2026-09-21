@@ -1,6 +1,6 @@
 # FIFO 行缓存与 8 级 ISP 链路实施计划
 
-> 目标：以 `fifo/async_fifo.v` 为基础制作 **FIFO 版任意尺寸行缓存 `line_buffer_fifo_nxn`**（pad 输出 + 简流握手反压），作为未来 8 级 ISP 唯一行缓存复用件；随后按 **BLC → DPC → Demosaic → 降噪 → AWB → CCM → Gamma → 锐化** 逐级建工程，首级承接 MIPI CSI-2 RX 的 AXIS(RAW10)，末级对接 VDMA S2MM。
+> 目标：以 `fifo/async_fifo.v` 为基础制作 **FIFO 版任意尺寸行缓存 `line_buffer_fifo_nxn`**（pad 输出 + 简流握手反压），作为未来 8 级 ISP 唯一行缓存复用件；随后按 **BLC → DPC → AWB → Demosaic → 降噪 → CCM → Gamma → 锐化** 逐级建工程（AWB 增益应用在去马赛克**之前**的 Bayer 域——工业主流；AWB 模块实现放链路最后，先直通占位），首级承接 MIPI CSI-2 RX 的 AXIS(RAW10)，末级对接 VDMA S2MM。
 > 上下游接口契约全部依据 `README.md` "未来目标"一节（实机确认版）。
 
 ---
@@ -20,8 +20,9 @@
 ## 二、总体架构决策
 
 ```
-CSI-2 RX ─AXIS(RAW10)─► [AXIS适配+入端FIFO] ─简流─► BLC ─简流─► DPC ─简流─► Demosaic ─简流(RGB888)
-                                                                      ─简流─► 降噪 ─► AWB ─► CCM ─► Gamma ─► 锐化
+CSI-2 RX ─AXIS(RAW10)─► [AXIS适配+入端FIFO] ─简流─► BLC ─简流─► DPC ─简流─► [AWB增益占位]
+     ─简流─► Demosaic ─简流(RGB 3×10bit)─► 降噪 ─► CCM ─► Gamma ─简流(RGB888)─► 锐化
+（AWB：增益应用在 DPC→Demosaic 之间的 Bayer 域；模块最后实现，先 1.0 增益直通占位）
                                                               ─► [出端适配+出端FIFO] ─AXIS(RGB888,tkeep=3'b111)─► VDMA S2MM
 
 反压通路：VDMA.tready → 出端FIFO → 逐级简流 ready → 入端FIFO → CSI-2 RX.tready
@@ -286,11 +287,17 @@ BLC/
 
 ---
 
-## 六、阶段 3：DPC → Demosaic（M3，Bayer 域，RAW10）
+## 六、阶段 3：DPC → Demosaic（M3，Bayer 域，RAW10）✅ 2026-09-20 完成
 
-> DPC/Demosaic 旧源码已被清空且无备份，按新接口**重新实现**（README 保留的历史结论做验收基准：DPC 包络检测注入 60 坏点 26.43→31.91dB；Demosaic 双线性 26.05dB / MHC 29.23dB）。
+> 实际执行与原计划不同：DPC/Demosaic 旧源码已从备份恢复（非空），按用户决定**复用已验证算法核**（逻辑零改动、位宽参数化 8→DW + 接口适配），新链路代码在 `Bayer_DPC_Demosaic/`，未重写算法。
+>
+> **验收结果**：四套 TB 全 PASS——双线性/MHC × 协议(16×12×5 帧四场景)/图像(112×103 真图+60 坏点)，期望比对 0 误差 + 出侧稳定性断言零违例 + 收发计数一致（960/960、11536/11536）。输出位宽按用户架构决策定为**线性 RGB 域 10bit 直通（out_data[29:0]）**，位宽缩减统一推迟到 Gamma 出口（M4 的 1024×8 LUT，内容预存 round 值零成本无偏置；VDMA 契约 tdata[23:0] 由 Gamma 出口给出）。PSNR（Bayer/RGB 均为 10bit 口径）：Bayer 域 28.33→38.84dB（+10.51）；RGB 域双线性 30.30→40.38dB（+10.08）；MHC 32.64dB（坏点链上高通细节项放大 DPC 残留，低于双线性）。对比图 `dpc_demosaic_compare.png`。
+>
+> **本阶段新踩坑（已记录）**：① 核 LAT=1 输出寄存器必须配 `hold_in` 保持——行缓存弹出决策（ostall）滞后一拍，反压时窗口 m 的结果会被 m+1 覆盖丢数；② include 守卫补丁连带修改——给 async_fifo 加守卫后，fwft_wrapper 里旧的"`define ASYNC_FIFO_V_INC` 再 include"会把整个文件内容屏蔽（宏已置位），必须删掉过时 define；③ 相位计数器重构（与 blc_core 同构的完整行列计数 + sof/eol 显式同步）。
 
-- **DPC/**：5×5 窗口包络检测（复用 `line_buffer_fifo_nxn` N=5，DW=10 → 窗口 250bit）；判决-替换输出同位宽简流 + phase 透传
+> ~~DPC/Demosaic 旧源码已被清空且无备份，按新接口重新实现~~（已被上方"复用已验证算法核"结论取代；原验收基准 26.43→31.91dB / 26.05dB / 29.23dB 保留作 8bit 旧版历史参照）。
+
+- ~~**DPC/**：5×5 窗口包络检测（复用 `line_buffer_fifo_nxn` N=5，DW=10 → 窗口 250bit）；判决-替换输出同位宽简流 + phase 透传~~ → 已实现为 `Bayer_DPC_Demosaic/dpc_stage.v`（核参数化复用 + 窗口相位自算 + hold_in 反压保持）
 - **Demosaic/**：5×5 窗口，双线性版先行 + MHC 版并列（两目录并存沿用项目"变体并存"文化）；输出 RGB888 简流（`DW=24` 打包或 3 通道拆分——**决策：打包 24bit 单流**，与出端 tdata[23:0] 一致省转换）
 - 每级：自检 TB + Python 校验 + 中文文档；接口与 BLC 输出（简流 + phase + sof/eol）无缝
 
@@ -298,18 +305,42 @@ BLC/
 
 ---
 
-## 七、阶段 4：降噪 → AWB → CCM → Gamma（M4，RGB 域）
+## 七、阶段 4：降噪 → CCM → Gamma（M4，线性 RGB 域 10bit）🔶 进行中
 
-| 级 | 实现 | 要点 |
+> 原计划含 AWB；**架构修订（2026-09-21）**：①WB 增益应用移到去马赛克之前的 Bayer 域（DPC 之后，工业主流）；②AWB 模块实现挪到链路最后（M6，需 MicroBlaze 软核决策交互），M4 期间 DPC→Demosaic 之间以 1.0 增益直通占位。
+
+### M4-1 降噪：双边滤波 ✅ 2026-09-21 完成（`BilateralFilter/`）
+
+> **执行修订**：原计划默认中值滤波，用户拍板先做**双边滤波**（保边证据更强、面试故事更完整）。中值版留作后续对比变体。
+
+> **验收结果**：协议 TB 四场景 + IMG 模式全 PASS（收发计数 1536=1536、11536/11536，位级 0 误差）；Python 独立第二判据位级同构复算 0 误差；PSNR/SSIM 对比图 `denoise_compare.png`。
+>
+> **实测指标（10bit 线性 RGB，σ_n=48 注噪）**：
+>
+> | | PSNR(dB) | SSIM | 边缘区 PSNR | 边缘区 SSIM |
+> |---|---|---|---|---|
+> | 注噪图 | 26.51 | 0.7197 | 26.51 | 0.8738 |
+> | 高斯降噪（同核参考） | 32.74 | 0.9216 | 31.42 | 0.9453 |
+> | 双边降噪（RTL） | 32.03 | 0.9039 | 31.06 | **0.9464** |
+>
+> 结论：3×3 小窗 + 窄空间核下双边以少量平坦区降噪能力换边缘保真（边缘区 SSIM 反超高斯的固有取舍），优势随窗口增大而显著。
+>
+> **本阶段新踩坑（已记录进全局 README「已知问题」）**：① **`in_ready` 双驱动成 X**——子模块输出端口与上层 `assign` 接同一 wire → 值冲突成 X → 握手型上游被挂死数万拍（修法：行缓存 `in_ready` 接独立 wire）；② **bypass 不能"等延迟"实现**——处理路径含行缓存 W+1 拍窗口延迟，与 4 拍旁路链不等，帧中间切换会错位（改为链路排空点帧级切换，禁热切换）；③ **σ_r 必须与噪声一起标定**——σ_r≈4.9σ_n（L1 量纲），照抄 8bit 值×4 只适合 σ_n=24，失配会让双边 PSNR 反低于高斯 3.5dB。
+>
+> **附带修复**：`line_buffer_fifo_nxn` 造行期发射判据改为握手兼容（`flush_fire` 每拍必发窗口，不再依赖输入侧 `beat_cnt`），M1 回归 PASS。
+
+| 模块 | 类型 | 要点 |
 |---|---|---|
-| 降噪 | 复用 MedianFilter/GaussianFilter 算法核 | DW 适配 RGB888、3×3 复用 `line_buffer_fifo_nxn`(N=3)；选型默认**中值**（椒盐 26.18dB 最优）|
-| AWB | 帧级统计 + 增益 | 复用 histogram_tutorial 双 BRAM 乒乓经验：统计第 N 帧、增益应用于第 N+1 帧；增益寄存器可配 |
-| CCM | 3×3 矩阵乘 | **全链唯一必须用乘法器/DSP 的一级**；系数 ×256 定点化（沿用 CSC 经验）、饱和限幅 |
-| Gamma | 256×10bit LUT | BRAM 实现，表内容 TB 可改；3 通道各一块 |
+| 降噪 ✅ | 3×3 窗口 | **双边滤波**（值域 LUT + 倒数 ROM + 3 DSP 乘法，10bit 域）；输入线性 RGB 10bit（3 通道打包 30bit 单流） |
+| CCM | 逐像素 | 9 乘法 + 加树 + 定点化 + 限幅（复用 CSC 经验）；负系数钳 0（10bit 域） |
+| Gamma | 逐像素 | **1024×8bit LUT**（10bit 进 8bit 出——全链位宽缩减统一在此出口，LUT 内容预存 round 值零成本无偏置）；表由 Microblaze/软件预生成 |
 
-每级独立目录（`Denoise/ AWB/ CCM/ Gamma/`）+ TB + Python 校验 + 文档；输入输出统一简流（DW=24）。
+每级独立目录（`Denoise/ CCM/ Gamma/`）+ TB + Python 校验 + 文档；输入输出统一简流（线性 RGB 域 3×10bit；Gamma 出口 3×8bit）。
 
-**验收（M4）**：逐级位级全等（AWB 增益延迟一帧的行为用双帧测试验证）。
+**验收（M4）**：逐级位级全等（Python 参考 10bit 域同公式）+ 反压场景收发一致 + PSNR 对比图。
+- 降噪选型：**双边滤波已实现**（M4-1 ✅）；中值版留作后续对比变体（历史椒盐场景 26.18dB）
+- CCM：**全链唯一必须用乘法器/DSP 的一级**；系数 ×256 定点化（沿用 CSC 经验）、负系数钳 0、饱和限幅
+- Gamma：**1024×8bit LUT**（10bit 进 8bit 出），BRAM 实现；3 通道各一块或合一块（地址拼通道），表内容软件预生成（含 round）
 
 ---
 
@@ -318,9 +349,22 @@ BLC/
 - **Sharpen/**：USM 锐化 `out = clip(orig + k*(orig - blur))`，blur 用 3×3（复用 line_buffer_fifo_nxn + 高斯核）；强度 k 参数化
 - **出端适配器**：简流(RGB888) → AXIS：`tdata[23:0] + tkeep=3'b111 + tuser(帧首) + tlast(行末) + tvalid/tready`
 - 出端弹性 FIFO + CDC（与入端对称）；反压回传：`tready=0 → FIFO 满 → 逐级 ready → 入端`
-- 整链 TB：AXIS 进（RAW10 帧流）→ 8 级 → AXIS 出，全链 PSNR + 逐级插桩比对
+- 整链 TB：AXIS 进（RAW10 帧流）→ 8 级（AWB 位直通占位）→ AXIS 出，全链 PSNR + 逐级插桩比对
 
 **验收（M5）**：S2MM 契约逐条核对（每帧首拍 tuser、每行末拍 tlast、tkeep=111、HSIZE/VSIZE 与分辨率一致）；整链 PSNR 报告（注明参考基准）。
+
+---
+
+## 八b、阶段 6：AWB 统计 + 增益 + 软核闭环（M6，链路最后实现）
+
+> 用户拍板（2026-09-21）：AWB 涉及 MicroBlaze 软核决策交互（PL 暴露统计 → 裸机 C 算增益 → AXI-Lite 回写 → 下一帧生效），放到其它模块全部串联完成之后做。M5 完成时 DPC→Demosaic 之间为 1.0 增益直通占位。
+
+- **awb_gain 应用级**（Bayer 域，DPC→Demosaic 之间）：与 `blc_core` 完全同构——按 `(row&1, col&1)` 相位从 `gain_00/01/10/11`（R/Gr/Gb/B）选一个做乘法，1 级流水可反压；增益寄存器可配（AXI-Lite），默认 1.0
+- **awb_stat 统计级**（Bayer 域，接 DPC 出）：按相位分组统计 R/Gr/Gb/B 均值（复用直方图双 BRAM 乒乓经验：统计第 N 帧、增益应用于第 N+1 帧）
+- **软核闭环**：MicroBlaze 裸机 C 读统计寄存器 → 算增益（灰世界/白点法）→ AXI-Lite 回写 → 下一帧生效（命中 JD"Vitis 裸机协同"，与 6month 计划 P3 W4 呼应）
+- WB 在 demosaic 前的架构依据：Bayer 域每像素 1 次乘法（省 3×）、AWB 统计按相位分组天然在此、先平衡再插值伪彩少；**WB（对角阵）必须在 CCM（满阵）之前**——数学上 WB·CCM ≠ CCM·WB
+
+**验收（M6）**：增益应用级位级全等（Python 同公式，双帧验证"第 N 帧统计 → 第 N+1 帧生效"行为）；软核闭环在上板阶段联调。
 
 ---
 
@@ -331,10 +375,11 @@ BLC/
 | **M0** ✅ | async_fifo 五阶段 [PASS]（2026-09-18） | 无（立即可做） |
 | **M0.5** ✅ | axis_stream_fifo 手写（AXIS Data FIFO 对齐版，含侧带 + 协议断言）0 误差（2026-09-18） | M0 |
 | **M1** ✅ | line_buffer_fifo_nxn：双判据 0 误差（4 组参数 PASS，含 640 宽图）+ 稳态 1 pixel/clock + 讲解文档（2026-09-18） | M0 |
-| **M2** ✅ | BLC（AXIS 适配 + 核）位级全等，双形态双判据 0 误差（2026-09-18） | M0（行缓存不强依赖，BLC 是逐像素级） |
-| **M3** | DPC、Demosaic 重实现并通过 | M1 + M2 |
-| **M4** | 降噪/AWB/CCM/Gamma 逐级通过 | M3（Demosaic 出 RGB888） |
-| **M5** | 锐化 + 出端适配 + 8 级整链 | M1-M4 |
+| **M2** ✅ | BLC（AXIS 适配 + 核）位级全等，双形态双判据 0 误差（2026-09-19） | M0（行缓存不强依赖，BLC 是逐像素级） |
+| **M3** ✅ | DPC→Demosaic 串联链：算法核参数化复用 + 简流反压 + hold_in 丢数修复；双核双判据 0 误差 + PSNR/对比图（2026-09-20） | M1 + M2 |
+| **M4** 🔶 | 降噪 ✅（双边，2026-09-21）/ CCM / Gamma 逐级通过（AWB 位 1.0 直通占位） | M3（Demosaic 出线性 RGB 10bit） |
+| **M5** | 锐化 + 出端适配 + 整链串联 | M4 |
+| **M6** | AWB 统计 + Bayer 域增益应用 + MicroBlaze 闭环（联调在上板阶段） | M5 |
 
 每阶段由用户口头触发开工（"开始做 XX"），单阶段一次会话内完成 RTL+TB+文档闭环；**不越级预做后续阶段**。
 
