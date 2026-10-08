@@ -6,11 +6,11 @@
 > **总路线**：[fpga-image-6month-plan-v2.md](fpga-image-6month-plan-v2.md)（P1 地基 → P2 四模块 RTL → P3 上板 → P4 定稿面试）；逐模块执行计划见 [fifo行缓存与8级ISP链路实施计划.md](fifo行缓存与8级ISP链路实施计划.md)（Month-2 里程碑 M0~M5）。
 > **工程实况**：[README.md](README.md)（子系统清单、接口契约、验证数据、快速开始）——改代码时必须同步更新对应章节。
 
-## 当前进度（2026-09-20）
+## 当前进度（2026-10-08）
 
-- **P1 · Month-2 里程碑**：M0 ✅ async_fifo → M0.5 ✅ axis_stream_fifo → M1 ✅ line_buffer_fifo_nxn → M2 ✅ BLC → M3 ✅ DPC→Demosaic 串联链；**下一步 M4**（降噪/AWB/CCM/Gamma），之后 M5（锐化 + 出端 AXIS + 整链）
+- **P1 · Month-2 里程碑**：M0 ✅ async_fifo → M0.5 ✅ axis_stream_fifo → M1 ✅ line_buffer_fifo_nxn → M2 ✅ BLC → M3 ✅ DPC→Demosaic 串联链 → M4-1 ✅ 双边降噪 → **M4-2 ✅ CCM**；**下一步 M4-3 Gamma**（1024×8 LUT，10bit 进 8bit 出，全链位宽缩减在此出口），之后 M5（锐化 + 出端 AXIS + 整链）、M6（AWB 闭环）
 - **Month-1 地基**全部完成：line_buffer（含 FIFO 版）/ CSC / bilinear v3+v4 / MeanFilter / GaussianFilter（MedianFilter 已恢复）
-- **面试口径（ISP 分域，见 6month 计划开篇）**：RAW 域（BLC→DPC）→ 线性 RGB 域（Demosaic→降噪→AWB→CCM）→ 感知域（Gamma→锐化）
+- **面试口径（ISP 分域，见 6month 计划开篇）**：RAW 域（BLC→DPC）→ 线性 RGB 域（Demosaic→降噪→CCM）→ 感知域（Gamma→锐化）
 - 六个月计划规则：**每阶段由用户口头触发开工，AI 不越级预做后续阶段**；每周只看本周清单
 
 ## 代码库结构（按链路位置）
@@ -35,6 +35,7 @@
 6. **git 备份**：用户要求推送时走 GitHub REST Git Data API（blob→tree→commit，token 读自 mcp.json）；PS1 脚本零中文字面量（PS5.1 无 BOM 会把中文读乱），用目录枚举规避；排除 `*.vvp/*.vcd/*.txt`
 7. **通信**：中文；解释简洁直接（用户反感含糊）；逐模块详细中文注释（含定点化推导、踩坑记录）
 8. **波形调试**：优先用 wave-mcp（已装全局 MCP，`prepare_session`/`open_session` + ~27 个分析工具），别只靠断点
+9. **禁止请教专家**：用户要求时，必须自己解决，不能请专家。
 
 ## RTL 设计铁律（改代码不可破坏）
 

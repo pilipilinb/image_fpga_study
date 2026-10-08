@@ -34,12 +34,37 @@
 //   本拍 beat（不是 BRAM 版那种延迟 N-1 拍的 valid_d[N-1]）。
 //
 // 【帧末造行（pad 的代价）】
+//
+//   ▸ 为什么会有“帧末”这件事：窗口中心 (r,c) 要的是 (r-K..r+K, c-K..c+K) 邻域，最深
+//     的那个角是 (r+K, c+K)——一个“未来”像素。所以窗口 (r,c) 只能在输入推进到
+//     (r+K, c+K) 时才凑齐 ⇒ 输出天然比输入晚 K 行 + K 列。对最后一个窗口 (H-1,W-1)，
+//     它要的 (H-1+K, W-1+K) 根本不存在 ⇒ 输出必须比输入**多跑 K*W+K 拍**。这一步任何
+//     streaming 窗口生成器都躲不掉；能省掉的只是“伪造输入数据”这件事。
+//
+//   ▸ 为什么不能“输出端 clamp 就完事”：输出级 mux 已经把越界源坐标钳到边界（见文件
+//     末尾 sel_row/sel_col），但钳完之后还得**读得到**那一格的正确数据。移位窗在冻结
+//     那一刻只装了右下角 (2K+1)×(2K+1) 一小块：
+//         win_reg[i][j] = 像素 (H-1-2K+i, W-1-2K+j)
+//     · 窗口 (H-1,W-1)：行、列都能钳进这一块 ⇒ 读得对；
+//     · 窗口 (H-1,0)  ：行能钳进（H-1-K..H-1），但列 0..K 不在块里（块只有最右
+//                       2K+1 列）⇒ 读出来是脏数据。
+//     也就是说“最后 K 行的左边那些列”光靠 clamp 拿不到——必须把数据**物理推到**它该
+//     在的位置，这就是造行。
+//
+//   ▸ 造行怎么做、为什么恰好等于 replicate padding：
 //   最后 K 行的窗口需要"还不存在的未来行"、最后 K 列的窗口需要"越界的列"。靠把
 //   最后一行数据循环多送 K*W+K 拍，把窗口链推过去，让这些窗口有机会吐出来。
 //   FIFO 版做法：造行期把第 1 级 FIFO 的输出**原地回写**（pop 一个字、同拍 push
 //   回同一个字）→ FIFO 内容原地旋转 → 天然按列循环吐出最后一行数据。
 //   （BRAM 版是用 fcol 地址循环扫实现的同构操作）
 //   stage2..N-1 照常弹出，被推出的旧行数据靠下一帧帧头自然冲掉。
+//   等价性再点明一次：原地旋转让各级吐出的都是“最后一行”的数据（行方向 = 行复制），
+//   同时让列按 1 步循环（列方向 = 列复制）——两者合起来正好就是 replicate padding，
+//   不需要额外的边界寄存器。
+//
+//   ▸ 为什么不改成“全宽行缓冲 BRAM + 绝对地址 clamp”（那样能彻底删掉造行）：存储必须
+//     支持任意 (行,列) 寻址才行，等于放弃“整块替换成 Xilinx FIFO Generator / AXIS Data
+//     FIFO IP”的能力；而且尾段 K*W+K 拍照样省不掉。取舍后保留 FIFO 版。
 //
 // 【反压冻结链（本模块相对 BRAM pad 版的真正增量）】
 //   out_ready=0 且输出寄存器里已有窗口（stall）
@@ -95,15 +120,19 @@ module line_buffer_fifo_nxn #(
     output wire              out_eol         // 该窗口中心列是 W-1
 );
 
-    localparam K  = (N - 1) / 2;                       // 半窗宽（N 为奇数）
+    localparam K  = (N - 1) / 2;                       // 半窗宽（N 为奇数），可以理解为被丢掉和需要补的窗口。比如5x5，在crop版本里会丢掉外围两圈，3x3会丢掉外围一圈
     localparam AW = $clog2(IMG_W);                     // 列地址位宽
     localparam RW = $clog2(IMG_H + 2*K);               // 行计数位宽（造行会推到 H+K）
     localparam DEPTH_FIFO = (1 << $clog2(IMG_W + 1));  // ≥ IMG_W+1，占用恒 IMG_W 永不 full
     localparam TOTAL_WIN  = IMG_H * IMG_W;             // 每帧窗口数
     // 1-based beat 序号区间：第 (K*W+K+1) 个 beat 出中心 (0,0)，到 END_BEAT 出中心 (H-1,W-1)
+    //通俗解释：第一个5x5窗口中心点是 (k,k),展宽来看这个像素就是第K*IMG_W + K + 1个像素，K·W+K 拍是预热期（FIFO 脏数据）
     localparam START_BEAT  = K*IMG_W + K + 1;
+    //真实 H·W 拍 + 造行拍，真实输入期 beat_idx ≤ H·W 碰不到上界，故它是概念边界 / 防御性判据
     localparam END_BEAT    = START_BEAT + TOTAL_WIN - 1;   // = (H+K)*W + K
-    localparam FLUSH_BEATS = K*IMG_W + K;                  // 帧末造行注入的 beat 数
+    //最后一个真实像素 (H−1,W−1) 到达时窗口中心才到 (H−1−K, W−1−K)，距 (H−1,W−1) 还差 K 行 + K 列 → 补 K·W+K 拍（FIFO 原地旋转喂复制行）。与帧头预热拍数对称（头欠多少、尾补多少）。
+    localparam FLUSH_BEATS = K*IMG_W + K;                  // 帧末造行注入的 beat 数，
+    //
 
     // ========================================================================
     // 声明区（寄存器 + 组合信号），全部放在逻辑之前
@@ -129,7 +158,7 @@ module line_buffer_fifo_nxn #(
 
     // ---- 握手与推进（组合）----
     wire busy     = |fifo_busy_flat;                  // 某个 FIFO 复位同步中
-    wire stall    = out_valid_r && !out_ready;        // 输出寄存器有窗口但下游没收
+    wire stall    = out_valid_r && !out_ready;        // 输出寄存器有窗口但下游没收  反压触发
     wire pipe_go  = !stall && !busy;                  // 本拍允许推进
     assign in_ready = rst_n && pipe_go && !flush_active;
 
@@ -137,13 +166,17 @@ module line_buffer_fifo_nxn #(
     // 【为什么最后一个造行拍要用 flush_last 而不是 flush_done 电平】fc==FLUSH_BEATS 是电平，
     //   若下游反压正好卡在这一拍，它会持续为高；而 beat 注入要等 pipe_go。用未门控的电平去
     //   清 ocr/occ 计数，会在"还没注入最后一拍"时就把窗口坐标清零 → 帧末窗口内容/sof 全错。
-    wire flush_done   = flush_active && (fc == FLUSH_BEATS);    // 电平（仅用于 FSM 判据）
+    wire flush_done   = flush_active && (fc == FLUSH_BEATS);    // 电平：正处于“最后一拍”（保留作判据参考；FSM 直接比 fc，本信号未被引用）
     wire flush_last   = flush_active && (fc == FLUSH_BEATS) && pipe_go;  // 真正注入最后一拍
     wire flush_fire   = flush_active && (fc != 0) && pipe_go;   // 造行注入拍（fc=0 是过渡拍）
     wire shift_fire   = din_valid || flush_fire;      // 本拍确实推进一个 beat
     wire beat_sof     = in_valid && in_ready && in_sof;
     wire end_of_frame = in_valid && in_ready && !flush_active &&
                         (row_cnt == IMG_H - 1) && (col_cnt == IMG_W - 1);
+    // 造行期的 beat 数据 = 第 1 级 FIFO 的输出（原地回写）。为什么取“第 1 级输出”：
+    //push = 往尾部塞一个字；pop = 从头部取一个字
+    //   此刻它的头部正好是最后一行某个列位置的像素，逐拍 pop 再 push 回去，就让它按
+    //   列循环吐最后一行 → 经各级级联后得到行复制 + 列复制（见文件头「帧末造行」）。
     wire [DW-1:0] beat_pix = flush_fire ? fifo_dout_flat[0 +: DW]  // 造行：原地回写第 1 级输出
                                         : in_data;
     wire [31:0]   beat_idx = beat_sof ? 32'd1 : (beat_cnt + 32'd1);
@@ -193,6 +226,14 @@ module line_buffer_fifo_nxn #(
         end
     end
 
+    // ------------------------------------------------------------------------
+    // 造行 FSM：帧末把“最后一行”再喂 K*W+K 拍，把窗口链推过帧末边界
+    //   fc = 0               过渡拍（刚进造行，本拍还没开始注入）
+    //   fc = 1..FLUSH_BEATS  注入拍（flush_fire=1，每拍喂一个“回写”beat）
+    //   fc == FLUSH_BEATS 且 pipe_go → 注入最后一拍并退出（flush_last）
+    //   ★ 整段只在 pipe_go=1 时推进：下游反压时原地冻结、恢复后无缝续跑，
+    //     所以造行拍数与窗口坐标都不会因反压而错位。
+    // ------------------------------------------------------------------------
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             flush_active <= 1'b0;
