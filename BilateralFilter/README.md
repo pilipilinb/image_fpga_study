@@ -6,8 +6,8 @@ ISP 链第五级（M4 第一模块）：**双边滤波降噪**。输入 = M3 Dem
 
 | 文件 | 说明 |
 |---|---|
-| `denoise_bilateral_core.v` | 双边核：L1 距离 → 值域 LUT → 空间核加权 → 倒数 ROM 归一化（LAT=3，10bit 域） |
-| `denoise_stage.v` | 行缓存(N=3, DW=30) + 核 + **bypass 旁路** + 反压冻结 |
+| `denoise_bilateral_core.v` | 双边核：L1 距离 → 值域 LUT → 空间核加权 → 倒数 ROM 归一化（核 **LAT=6**，10bit 域；拆流水后） |
+| `denoise_stage.v` | 行缓存(N=3, DW=30) + **窗口寄存器** + 核 + **bypass 旁路** + 反压冻结（处理路径总延迟 = 窗口 1 + 核 6 = 7） |
 | `tb_denoise_bilateral.v` | 自检 TB：协议四场景 + bypass 三段落切换 + IMG 模式，期望预生成逐拍比对 |
 | `make_denoise_data.py` | LUT/倒数 ROM 系数生成 + M3 链出图注噪 + Python golden（与 RTL 位级同构） |
 | `verify_denoise.py` | 独立复算（位级）+ PSNR/SSIM（全图 + 边缘区）+ 高斯对比 + 四宫格 |
@@ -58,6 +58,7 @@ ISP 链第五级（M4 第一模块）：**双边滤波降噪**。输入 = M3 Dem
 | 图像 TB（112×103，M3 链出图 + 高斯噪声 σ=48） | **[PASS]** 11536/11536 |
 | Python 独立复算（位级） | **全等 0 误差**（LUT/ROM 系数与 golden 同源生成） |
 | bypass 场景 | 位级等于输入（直通）+ 核路径回归一致 |
+| **OOC 时序**（Vivado 2021.2，`xcvu19p-fsva3824-2-e`，150 MHz） | **40 级 / −5.804ns ❌ → 13 级 / +2.145ns ✅**（三轮迭代拆流水；每轮 TB 重跑仍 0 误差）详见「时序收敛实战」 |
 
 **PSNR / SSIM（10bit 域，σ_n=48，MAX=1023）**：
 
@@ -72,7 +73,7 @@ ISP 链第五级（M4 第一模块）：**双边滤波降噪**。输入 = M3 Dem
 ## 设计要点
 
 1. **三个定点技巧**（面试主线）：① 值域核查 LUT 而不算 exp，且 3.11σ 截断让 1024 项表（1 个 BRAM）覆盖全部有效范围；② 归一化除法 → 倒数 ROM + 1 次乘法，三通道共用同一 den；③ round-half-up（+2^19）消除截断偏置。
-2. **LAT = 3 拍**：T0 组合（d → LUT 异步读 → 加权累加）→ T1 num/den 寄存 → T2 倒数 ROM 同步读（★num 三路同拍打）→ T3 乘+round+移位+饱和。上板时序紧时把 LUT 改同步读拆成 LAT=4。
+2. **核 LAT = 6 拍（拆流水后）**：E1 `wr`/窗口寄存 → E2 加树两段寄存 → E3 num/den 寄存 → E4 倒数 ROM 同步读（★num 三路同拍打）→ E5 乘积寄存 → E6 round/移位/饱和 → 输出寄存。**原设计 LAT=3、OOC 实测 40 级 / WNS −5.804ns @150MHz 不收敛**，经三轮迭代拆到 **13 级 / +2.145ns ✅**——全过程带时序报告片段见下面「时序收敛实战」。
 3. **bypass 旁路（M4 三模块统一接口）**：`bypass=1` 时数据经 `axis_stream_fifo`（M0.5 现成件）直通输出，**处理路径整体冻结**（行缓存 `in_valid=0`，保住"FIFO 占用恒 = IMG_W"的不变式）。
    **切换必须发生在链路排空点**——bypass 路径延迟（FIFO 4 拍）与处理路径（行缓存 K·W+K + 核 3 拍）差 W+1 个像素量级，帧中间热切换必然错位。场景价值：半导体检测关降噪/CCM、检测后单独走显示通路——算法边界的产品化表达。
 4. **两条路径完全解耦**：`in_ready = bypass ? byp_ready : lb_inready`。bypass 期不被行缓存造行反压无谓阻塞，处理路径不被 bypass FIFO 拖累。
@@ -82,6 +83,105 @@ ISP 链第五级（M4 第一模块）：**双边滤波降噪**。输入 = M3 Dem
 1. **`in_ready` 双驱动 → X 态挂死**：stage 自己 `assign in_ready` 的同时又把行缓存的 `in_ready` 输出端口接到同一 wire —— 造行期两者值不同（0 vs 1）→ 冲突成 X → 握手型上游被 X 挂死数万拍。**修法**：行缓存的 `in_ready` 接独立 wire `lb_inready`，参与 stage 的 assign 运算。（M1 的 TB 源不握手，掩盖了这个接口缺陷；M3 因无 bypass 恰好没触发，但同类写法是隐患。）
 2. **bypass 与处理路径延迟不等**：最初按"等延迟旁路"设计（bypass 打 3 拍与核对齐），忽略了行缓存的 K·W+K 窗口延迟——帧中间切换时两条流错位 W+1 像素。**修法**：改为"排空点切换"（停源 → 等出口清空 → 切换 → 再发），并在文档中明确"bypass 是帧级配置，禁止运行中热切换"。
 3. **σ_r 标定失配导致"双边不如高斯"**：照抄 8bit 的 σ_r=30 ×4 = 120，只适合 σ_n=24；本实验注入 σ_n=48 → 值域核过窄、中心权重过大 → 降噪不足（PSNR 反低于高斯 3.5dB）。**修法**：按 σ_r ≈ 4.9σ_n 重标定为 240（CUT 747、LUT 1024 项）。**教训：σ_r 是"噪声尺度"参数，必须与实际噪声一起标定，不能只做位宽等比换算。**
+
+## ★ 时序收敛实战：40 级 / −5.804ns → 13 级 / +2.145ns（面试主线）
+
+> 数据来自 Vivado 2021.2 OOC 综合（器件 `xcvu19p-fsva3824-2-e`，约束 150 MHz = 6.667 ns），
+> 顶层取 **`denoise_stage`**（不是 `denoise_bilateral_core`）；脚本 [synth_ooc_timing.tcl](../synth_ooc_timing.tcl)，报告生成在 `synth_rpt/`（本地产物，未入库）。
+> **功能侧全程 0 误差**（每轮都重跑 TB：协议 1536/1536、真图 11536/11536）——拆流水是**纯 retiming**，输出序列一位不变。
+
+### 迭代 0 · 现象：功能 100% 正确，时序差 5.8 ns
+
+| 顶层 | 逻辑级数 | WNS @150MHz |
+|---|---|---|
+| `denoise_stage` | **40** | **−5.804 ns** ❌（隐含上限 ≈80 MHz） |
+| `ccm_stage`（**无行缓存**、LAT=2） | 8 | +4.748 ns ✅ |
+
+**先做对照实验再改代码**：同样"逐像素核 + 乘加 + 饱和"，唯独带**行缓存**的这一层炸了 ⇒ 嫌疑锁死在"行缓存输出 → 核"这段接口上。（同时排除了"用了 function / 乘法器太多"这类直觉猜测。）
+
+### 迭代 1 · 病因 ①：行缓存 pad mux 是**组合**逻辑，与核叠在同一拍
+
+报告片段（迭代 0）：
+```
+Slack (VIOLATED) : -5.804ns
+  Source:      u_lb/lc_r_reg[0]/C          ← 行缓存"窗口中心行"坐标寄存器（不是数据寄存器！）
+  Destination: u_core/nB__6/DSP_OUTPUT_INST/ALU_OUT[0]
+  Data Path Delay: 12.451ns (logic 8.580 (68.9%) route 3.871 (31.1%))
+  Logic Levels: 40 (CARRY8=3 DSP_A_B_DATA=1 DSP_ALU=9 DSP_M_DATA=1 DSP_MULTIPLIER=1
+                   DSP_OUTPUT=8 DSP_PREADD_DATA=1 LUT2=1 LUT3=2 LUT4=3 LUT5=5 LUT6=4 MUXF7=1)
+```
+`Source` 竟是**窗口中心坐标寄存器**而不是数据寄存器——因为 `out_win_flat` 的 pad 选择器是真组合逻辑（见 `line_buffer_fifo_nxn.v`）：
+```verilog
+assign win_out_flat[(oi*N+oj)*DW +: DW] = win_reg[sel_row(oi,lc_r)*N + sel_col(oj,lc_c)];
+```
+`sel_row/sel_col`（带 clamp 的整数运算）→ 9:1 mux → **核内加法树/乘法/饱和** → 输出寄存器，全部压在一个时钟周期里。
+
+**修法**：在 `denoise_stage` 里对 `lb_win` 插一级窗口寄存器（`valid` 同行，`sof/eol` 走等深对齐链）：
+```verilog
+always @(posedge clk or negedge rst_n)
+    if (!rst_n)      begin win_q <= 0; wv_q <= 1'b0; end
+    else if (!ostall) begin win_q <= lb_win; wv_q <= lb_valid; end   // ostall 时同步冻结
+```
+> **为什么不直接改 `line_buffer_fifo_nxn`？** 它被 M1/M3/M4 共用，且"内部 FIFO 占用恒 = IMG_W"是已验证的不变式；在 stage 里打拍是**局部、零风险**的改法（共用件一行不动）。
+
+**效果**：40 → **34 级**，−5.804 → **−4.258 ns**（路径起点由 `lc_r` 变成 `win_q` ✓ 证明 pad mux 确已切出去）。
+
+### 迭代 2 · 病因 ②：9 项加树被映射成 **DSP 级联链（8 跳）**
+
+报告片段（迭代 1 后）：
+```
+Slack (VIOLATED) : -0.520ns
+  Source:      u_core/g_px[8].wr_r_reg[8][0]/C     ← 已是我新加的 wr 寄存器 ✓
+  Destination: u_core/nB__6/DSP_OUTPUT_INST/ALU_OUT[0]
+  Data Path Delay: 7.167ns (logic 6.873 (95.9%)  route 0.294 (4.1%))   ← 几乎全是逻辑，路由只占 4%！
+  Logic Levels: 21 (DSP_A_B_DATA=1 DSP_ALU=9 DSP_M_DATA=1 DSP_MULTIPLIER=1
+                   DSP_OUTPUT=8 DSP_PREADD_DATA=1)
+```
+逐级看出这是 **DSP48 的 PCIN→PCOUT 级联链**（每跳的固定开销）：
+```
+DSP_ALU(nB0)    0.546  →PCOUT
+DSP_OUTPUT(nB0) 0.122
+   ↓ 路由 0.014
+DSP_ALU(nB )    0.546  → 每跳 ≈0.68ns，9 项加树 = 8 跳 ≈5.5ns
+DSP_OUTPUT(nB ) 0.122
+   …（重复到 nB__6）
+```
+即：`Σ w_k·v_k`（每通道 9 个乘法 + 加树）被综合器塞进**一串级联的 DSP**，跳了 8 次。**route 只占 4% ⇒ 纯 DSP 内部延迟 6.87 ns**，与布线拥塞无关。
+
+**修法（一刀拆成三处）**：
+1. **LUT 出口寄存**：值域权重 `wr` 与窗口像素 `W_r` 各打一拍（像素必须**同拍延迟**，否则乘法两边错拍）→ 切掉 `d9`（三通道 L1 绝对差）+ 分布 ROM 读。
+2. **乘积寄存**：`pr_r <= numR_q * inv_r;` 单独一拍 → 把 round/饱和从 DSP 组合 ALU 里赶出去（此前 `DSP_OUTPUT=8` 就是在算这个）。
+3. **加树中间切开**：`nR =（taps0-4 的和寄存）+（taps5-8 的和寄存）` → 每段最多 4 跳 DSP 级联。
+
+**效果**：34 → 21 → **13 级**，−4.258 → −0.520 → **+2.145 ns ✅**
+
+最终报告片段：
+```
+Slack (MET) : 2.145ns
+  Logic Levels: 13 (DSP_A_B_DATA=1 DSP_ALU=5 DSP_M_DATA=1 DSP_MULTIPLIER=1
+                   DSP_OUTPUT=4 DSP_PREADD_DATA=1)
+  Data Path Delay: 4.502ns (logic 4.201 (93.3%) route 0.301 (6.7%))
+```
+
+### 三轮汇总
+
+| 迭代 | 动作 | 级数 | WNS | FF |
+|---|---|---|---|---|
+| 0 | —（原设计，核 LAT=3） | 40 | −5.804 ❌ | 744 |
+| 1 | stage 窗口寄存器（切行缓存 pad mux） | 34 | −4.258 ❌ | 1014 |
+| 2 | 核内 LUT 出口寄存 + 乘积寄存 + 加树中间切 | **13** | **+2.145 ✅** | 1421 |
+
+**代价**：核 LAT 3 → **6**（stage 处理路径总延迟 4 → **7** = 窗口 1 + 核 6，对齐链 7 级）；FF 744 → 1421；LUT 3146 → 3051（几乎不变）；DSP 33 → 30。**输出一位没变。**
+
+### 面试问答（预演）
+
+- **Q：这个问题你怎么发现的？** 功能 TB 全过、PSNR/SSIM 也漂亮，是我主动做 **OOC 综合预检**时发现的——**仿真只验功能、不验时序**，这一步不能省。同批扫描还发现锐化同样超时（见 `Sharpen/README.md`）。
+- **Q：怎么快速定位到"行缓存接口"？** 拿一个结构相近但**没有行缓存**的模块做对照（`ccm_stage`：8 级 / +4.748ns ✅），差别只有行缓存 ⇒ 一眼锁定。**有对照实验，就不用猜。**
+- **Q：为什么行缓存会让路径变长？** 它的 pad 选择器（`sel_row/sel_col` + 9:1 mux）是**组合**逻辑，直连核时与核内逻辑叠成一条超长路径；关键路径的起点甚至不是数据寄存器，而是窗口**中心坐标**寄存器。
+- **Q：拆流水的次序怎么定？** 读 `report_timing` 的 `Logic Levels` 构成：`CARRY8` 多 ⇒ 加法器树太长；`DSP_ALU/DSP_OUTPUT` 多 ⇒ 逻辑被吸进了 DSP 组合旁路。哪项占比大就先切哪一刀。
+- **Q：DSP 不是应该帮忙吗？为什么不直接用它？** DSP48 的 ALU/输出级既能当逻辑用也能当寄存器用；**不给显式寄存器时，综合器倾向于把整条"乘加 + round + 饱和"塞进级联的 DSP**，而级联每跳约 0.68ns，9 项加树 = 8 跳 ≈ 5.5ns，反而成了瓶颈。修法就是在乘法/加树中间**显式写寄存器**，逼综合器在那里断链。
+- **Q：改了 LAT 会不会改功能？** 不会——纯 retiming，输出序列不变。但有个必踩的连带项：`stage` 的 `sof/eol` 对齐链深度必须同步改成 `LAT_WIN + LAT_CORE`，**少一级/多一级都会让 sof/eol 与数据错位**（本模块因此从 4 级改到 7 级）。
+- **Q：行缓存的造行反压/占用不变式有没有被破坏？** 没有——窗口寄存器在 stage 层，共用件 `line_buffer_fifo_nxn` 一行未改；`ostall` 时窗口寄存器与行缓存**同步冻结**，占用恒 `IMG_W` 的不变式原样保住。
 
 ## 复现命令
 

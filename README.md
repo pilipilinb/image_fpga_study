@@ -1,6 +1,6 @@
 # image_fpga_study · FPGA 图像处理学习项目
 
-> 换工作向 FPGA 图像处理学习项目（2026-08）· 各子系统已手写实现并仿真验证（手写 vs IP 资源对比待办）；Month-2 8 级 ISP 建链进行中：M0~M3 ✅、**M4-1 双边降噪 ✅**、**M4-2 CCM ✅**（详见[学习路线与进度](#学习路线与进度)）
+> 换工作向 FPGA 图像处理学习项目（2026-08）· 各子系统已手写实现并仿真验证（手写 vs IP 资源对比待办）；Month-2 8 级 ISP 建链：M0~M3 ✅、**M4 降噪/CCM/Gamma 三模块全部 ✅**（详见[学习路线与进度](#学习路线与进度)）
 > 纯 RTL 推断实现（不依赖任何 FPGA IP），iverilog 仿真 + 自校验 TB + Python 独立校验脚本
 > 最终目标：把自研 8 级 ISP（BLC → DPC → AWB → Demosaic → 降噪 → CCM → Gamma → 锐化；AWB 在去马赛克前的 Bayer 域，模块最后实现）接入 Microblaze + MIPI 实机平台，替换 Xilinx 官方 Sensor Demosaic IP——详见[未来目标](#未来目标自研-8-级-isp-接入-microblaze--mipi-平台)
 
@@ -30,6 +30,9 @@
   - [BAYER_DPC_DEMOSAIC · DPC→Demosaic 串联链（M3，Bayer 域 RAW10）](#bayer_dpc_demosaic--dpcdemosaic-串联链m3bayer-域-raw10)
   - [BILATERALFILTER · 双边滤波降噪（M4-1，线性 RGB 域 10bit）](#bilateralfilter--双边滤波降噪m4-1线性-rgb-域-10bit)
   - [CCM · 色彩校正矩阵（M4-2，线性 RGB 域 10bit）](#ccm--色彩校正矩阵m4-2线性-rgb-域-10bit)
+  - [GAMMA · 伽马校正（M4-3，10bit→RGB888，全链位宽缩减出口）](#gamma--伽马校正m4-310bitrgb888全链位宽缩减出口)
+  - [SHARPEN · USM 锐化（M5.1，感知域 RGB888）](#sharpen--usm-锐化m51感知域-rgb888)
+  - [AXISOUT · 出端 AXIS 适配（M5.1，简流 RGB888 → VDMA S2MM）](#axisout--出端-axis-适配m51简流-rgb888--vdma-s2mm)
 - [目录结构](#目录结构)
 - [快速开始](#快速开始)
 - [验证工具链](#验证工具链)
@@ -48,8 +51,11 @@
 | **手写 FIFO 基础件（fifo）** | 基础设施 | 双时钟 FIFO（对齐 FIFO Generator）+ AXIS Data FIFO（侧带打包 tuser/tlast）：跨域、速率匹配、链路首尾弹性缓冲 |
 | **黑电平校正（BLC）** | 逐像素点运算（ISP 第一级） | max(p−OB[相位], 0) 四通道饱和减；AXIS(RAW10) 入口 + 写法乙省位宽 + out_phase 直供后级 |
 | **DPC→Demosaic 串联链（M3）** | Bayer 域 5×5 窗口两级 | 算法核参数化复用旧工程 + 简流反压 + 窗口相位自算；DPC 后 Bayer 域 28.33→38.84dB（+10.51） |
-| **双边降噪（M4-1）** | 线性 RGB 域 3×3 窗口 | L1 值域核 LUT + 倒数 ROM 归一化 + 空间核移位（0 乘法器）；LAT=3；bypass 旁路（排空点切换）；边缘区 SSIM 优于高斯 |
+| **双边降噪（M4-1）** | 线性 RGB 域 3×3 窗口 | L1 值域核 LUT + 倒数 ROM 归一化 + 空间核移位（0 乘法器）；核 LAT=3→**6**、stage 总延迟 **7**（拆流水后）；bypass 旁路（排空点切换）；边缘区 SSIM 优于高斯。**OOC 时序 40 级/−5.804ns ❌ → 13 级/+2.145ns ✅ @150MHz** |
 | **色彩校正矩阵（M4-2）** | 线性 RGB 域 逐像素 | 9 个 Q5.12 有符号乘 + 加树 + round + 饱和（LAT=2）；**全链唯一用 DSP 的一级**；等延迟 bypass（可帧内热切换）；行和=1 ⇒ 灰阶逐位保持；色卡 ΔE 12.14→0.12 |
+| **伽马校正（M4-3）** | 线性 RGB 域 逐像素 | 1024×8 LUT（3 份并行副本）+ 同步读（LAT=1）；**全链位宽缩减唯一出口**（10bit→RGB888）；bypass=线性 10→8；穷举 1024 项全表 0 误差；亮度 +62.6% |
+| **USM 锐化（M5.1）** | 感知域 RGB888 3×3 窗口 | `orig + k·(orig−blur)`，blur 用 0 乘法器高斯；**修正量走"符号-幅值"两路**（消灭 signed/算术右移歧义）；k 10bit 端口（k=k_gain/256）；核 LAT=2、**stage 加窗口寄存器后总延迟 3**；bypass 排空点切换；Tenengrad +9.3%；**OOC 时序 15 级 / WNS +2.583ns @150MHz ✅**（拆流水前 35 级 / −1.930ns ❌） |
+| **出端 AXIS 适配（M5.1）** | 链路出口 / 基础设施 | 简流(RGB888)→AXIS(tdata/tkeep=111/tuser/tlast)+弹性 FIFO；S2MM 契约逐条核对（fire 3072=收 3072、帧 16、行 192） |
 | **行缓存（LINE_BUFFER）** | 邻域运算地基 | N×N 窗口生成器，卷积/缩放/滤波的复用底座；含 FIFO 版（支持反压 + 可换 IP） |
 | **色彩空间转换（CSC）** | 逐像素点运算 | RGB → YCbCr（BT.601），1 对 1 映射，不需要行缓存 |
 | **双线性插值缩放（bilinear）** | 邻域运算 | 任意整数倍缩放（放大 N 倍 / 缩小 N 倍）；v3 整图 ROM 版 + v4 行缓存版（大图/实时视频） |
@@ -71,8 +77,8 @@
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | **P1 · 地基**（Month-1） | 行缓存（含 FIFO 版）· 手写 CSC · 双线性缩放 v3+v4 · 滤波三件套（均值/高斯/中值）· Sobel 边缘检测 · 直方图均衡 · 滤波+CSC+缩放 串链路 | ✅ 完成 |
-| **P1 收尾 · ISP 前端建链**（Month-2） | M0 `async_fifo` → M0.5 `axis_stream_fifo` → M1 `line_buffer_fifo_nxn` → M2 BLC → M3 DPC→Demosaic 串联链 → **M4 降噪 / CCM / Gamma** → M5 锐化 + 出端 → M6 AWB 闭环 | 🔶 进行中：M0~M3 ✅、**M4-1 双边降噪 ✅**、**M4-2 CCM ✅** |
-| **P2 · 四模块 RTL**（10 月） | 降噪 ✅、CCM ✅（均提前落地）· USM 锐化 · 3A 统计；画质评测脚本 PSNR/SSIM 已建、MTF 待建、ΔE 已建 | ⬜ |
+| **P1 收尾 · ISP 前端建链**（Month-2） | M0 `async_fifo` → M0.5 `axis_stream_fifo` → M1 `line_buffer_fifo_nxn` → M2 BLC → M3 DPC→Demosaic 串联链 → **M4 降噪 / CCM / Gamma** ✅ → M5 锐化 + 出端 → M6 AWB 闭环 | 🔶 进行中：M0~M4 ✅（**M4 三模块全部完成**） |
+| **P2 · 四模块 RTL**（10 月） | 降噪 ✅、CCM ✅、Gamma ✅（M4 已提前落地）· USM 锐化 · 3A 统计；画质评测脚本 PSNR/SSIM/ΔE 已建，MTF 待建 | ⬜ |
 | **P3 · 上板**（11 月） | 全链 8 级仿真预演 → 上板出图 → 帧存 + AXI-Lite 配寄存器 → AE/AWB 软核闭环 | ⬜ |
 | **P4 · 定稿面试**（12 月） | 项目定稿 + 八股 + 模拟面试 → 01–02 月投递面试 | ⬜ |
 
@@ -182,11 +188,11 @@ CSI-2 RX ─AXIS─► [AXIS 适配 + 入端弹性 FIFO]
 | BLC 黑电平校正 | Bayer | RAW → RAW | 无（逐像素减偏置，每通道一个偏置） | ✅ 已实现（Month-2 M2：双形态双判据 0 误差；图像链 PSNR 不校 19.47dB → 校准 inf / 校偏 36.12dB） |
 | DPC 坏点校正 | Bayer | RAW → RAW | 5×5 窗口 | ✅ 新链路版（Month-2 M3：`dpc_envelope_dw.v` DW 参数化 + 简流反压；RAW10 注 60 坏点 28.33→38.84dB；8bit 旧版 26.43→31.91dB） |
 | Demosaic 去马赛克 | Bayer → RGB | RAW10 → RGB(3×10bit)（线性域直通，缩减在 Gamma 出口） | 5×5 窗口 | ✅ 新链路版（Month-2 M3：双线性/MHC 双核 DW 参数化换核不改线；RGB 域 10bit 口径 DPC 后 40.38dB；8bit 旧版 26.05/29.23dB） |
-| 降噪 | RGB | RGB → RGB | 3×3 窗口 | ✅ 新链路版（M4-1 `BilateralFilter/`：双边滤波 10bit 域 + bypass，位级 0 误差；PSNR 32.03dB / 边缘区 SSIM 0.9464 > 高斯 0.9453）。历史 8bit 三套可选（均值/高斯/中值）保留 |
+| 降噪 | RGB | RGB → RGB | 3×3 窗口 | ✅ 新链路版（M4-1 `BilateralFilter/`：双边滤波 10bit 域 + bypass，位级 0 误差；PSNR 32.03dB / 边缘区 SSIM 0.9464 > 高斯 0.9453）。**OOC 时序 40 级/−5.804ns ❌ → 13 级/+2.145ns ✅ @150MHz**（三轮拆流水，详见其 README「时序收敛实战」）。历史 8bit 三套可选（均值/高斯/中值）保留 |
 | AWB 自动白平衡 | **Bayer（RAW）** | RAW → RAW | **帧级统计**（按 R/Gr/Gb/B 相位分组）+ 增益应用 | 未实现（M6 最后做：增益应用级 = 与 blc_core 同构的相位选增益乘法，插 **DPC→Demosaic 之间**；统计级接 DPC 出，双 BRAM 乒乓"统计第 N 帧、增益第 N+1 帧生效"；软核闭环 MicroBlaze 裸机 C；M4/M5 期间 1.0 直通占位）。**WB 在去马赛克前** = 工业主流（Bayer 域每像素 1 次乘法省 3×、先平衡再插值伪彩少；对角阵 WB 必须在满阵 CCM 之前） |
 | CCM 色彩校正矩阵 | RGB | RGB → RGB | 无（3×3 矩阵乘） | ✅ M4-2 `CCM/`：Q5.12 有符号定点 + 饱和，LAT=2，等延迟 bypass；位级 0 误差 + 灰阶逐位保持 + 色卡 ΔE 12.14→0.12。**全链唯一用 DSP 的一级** |
-| Gamma 伽马校正 | RGB | RGB → RGB | 无（LUT） | 未实现（M4 计划：**1024×8bit LUT**，10bit 进 8bit 出——全链位宽缩减统一在此出口，LUT 内容 Microblaze 预存 round 值实现零偏置折算） |
-| 锐化 | RGB | RGB → RGB | 3×3 窗口 | 未实现（USM：原图 + 高频×强度，可复滤波的行缓存） |
+| Gamma 伽马校正 | RGB | RGB → RGB（**10bit → 8bit**） | 无（LUT） | ✅ M4-3 `Gamma/`：1024×8 LUT（3 份并行副本）+ 同步读 LAT=1；**全链位宽缩减唯一出口**；穷举 1024 项全表 0 误差 + 单调性/端点通过；亮度 101.34→164.77（+62.6%） |
+| 锐化 | RGB（感知域） | RGB888 → RGB888 | 3×3 窗口 | ✅ M5.1 `Sharpen/`：USM `orig + k·(orig−blur)`，blur 用 0 乘法器高斯；修正量"符号-幅值"两路 + k 10bit 端口；核 LAT=2、stage 总延迟 3（窗口寄存器 + 核拆分）；bypass 排空点切换；三模式 TB 全 PASS + Tenengrad +9.3%；**OOC 时序 35 级/−1.930ns → 15 级/+2.583ns ✅**。出端 AXIS 适配见 M5.1 `AxisOut/`（S2MM 契约逐条通过） |
 
 **顺序的依据**：BLC/DPC/AWB **必须在 Demosaic 之前**——它们处理的是"每个像素只有一个颜色"的 Bayer 数据：坏点留到 Demosaic 后会被插值扩散成彩色斑点；WB 增益在 Bayer 域每像素只乘一次且先平衡再插值伪彩少（工业主流做法）。AWB 排在 DPC 之后：DPC 用绝对阈值 THR，在原始 RAW 域判定不受增益漂移影响。CCM/Gamma/锐化 **必须在 Demosaic 之后**——它们需要 RGB 三通道齐全；且 **WB（对角阵）必须在 CCM（满阵）之前**（WB·CCM ≠ CCM·WB，先修色温再修串色）。
 
@@ -225,8 +231,9 @@ CSI-2 RX ─AXIS─► [AXIS 适配 + 入端弹性 FIFO]
 | **M1** | `line_buffer_fifo_nxn`（FIFO 版 N×N，pad + 反压；双判据 0 误差，4 组参数含 640 宽图；稳态 1 pixel/clock） | ✅ 2026-09-18 |
 | **M2** | BLC（AXIS 适配 + 黑电平校正核，逐通道偏置） | ✅ 2026-09-19 |
 | **M3** | DPC→Demosaic 串联链（算法核参数化复用 + 简流反压 + hold_in 丢数修复；双核双判据 0 误差） | ✅ 2026-09-20 |
-| **M4** | 降噪 ✅（双边，M4-1）→ CCM ✅（M4-2）→ Gamma（线性 RGB 域 10bit；AWB 位 1.0 直通占位） | 🔶 进行中 |
-| **M5** | 锐化 + 出端 AXIS 适配 + 8 级整链 | ⬜ |
+| **M4** ✅ | 降噪 ✅（双边，M4-1）→ CCM ✅（M4-2）→ Gamma ✅（M4-3）—— 线性 RGB 域三模块全部完成（AWB 位 1.0 直通占位） | ✅ M4 完成 |
+| **M5.1** ✅ | **锐化（USM，感知域 RGB888）+ 出端 AXIS 适配（S2MM 契约）**——三模式 TB 全 PASS + 锐度量化 + 契约逐条核对 | ✅ 2026-10-09 |
+| **M5.2** | 8 级整链串联（AXIS(RAW10) 进 → RGB888 出，全链 PSNR + 逐级插桩比对） | ⬜ |
 | **M6** | AWB 统计 + Bayer 域增益应用（插 DPC→Demosaic 之间）+ MicroBlaze 闭环——涉及软核交互放链路最后 | ⬜ |
 
 ---
@@ -625,6 +632,81 @@ ISP 第六级。输入 = M4-1 降噪出的线性 RGB 10bit 简流，输出同格
 
 文档：[CCM/README.md](CCM/README.md) · 计划 [CCM实现计划.md](CCM/CCM实现计划.md)
 
+### GAMMA · 伽马校正（M4-3，10bit→RGB888，全链位宽缩减出口）
+
+ISP 第七级（**M4 收官**）。输入 = M4-2 CCM 出的线性 RGB 10bit 简流，输出 **RGB888**（`out_data[23:0]`）。算法来自 [Gamma/伪代码.c](Gamma/伪代码.c)，核对结论见 [Gamma实现计划.md](Gamma/Gamma实现计划.md)。
+
+- **★ 本模块是全链位宽缩减的唯一出口**：线性 RGB 域全程 10bit（降噪/CCM 都不降），10→8 的量化统一在此付一次——LUT 内容离线预存 `round` 值 ⇒ **折算零硬件成本、零偏置**；下游 VDMA 的 `tdata[23:0]` 契约由此给出
+- **算法**：`LUT[x] = clamp(floor(255·(x/1023)^(1/2.2)+0.5), 0, 255)`，`out = {LUT[R],LUT[G],LUT[B]}`（三通道同拍并行查表）；曲线样例 x=64/256/512/768 → **72/136/186/224**（对比线性 `>>2`：16/64/128/192，暗部大幅提亮）
+- **伪代码核对（3 改 + 补强）**：① `8bit 地址 → 2048 bit → 半个 BRAM18` **算错**（实际 11%）；② **漏算"三通道三个读口"**——BRAM18 只有 2 个读口，RGB 同拍各查一次 → 必须 **3 份副本**；③ 输入位宽按 8bit 写的 `x/255`，本链路是 10bit；➕ `floor(x+0.5)` 舍入 / 端点 / **单调性穷举校验** / 静态 .coe（用户拍板：曲线是确定值，不走 MicroBlaze）
+- **资源**：3×(1024×8) = 24576 bit ≈ **1 个 BRAM36**（或 2 个 BRAM18）；**无乘法器、无 DSP、无行缓存**；**LAT = 1**（BRAM 自带输出寄存器，`run_en` 直接当读使能 → 冻结时输出原地保持；**有使能用使能，没有才要 hold_in**——与 M3 DPC 的对照）
+- **bypass**：等延迟旁路（1 拍）⇒ 可任意拍切换。**语义与 CCM 不同**：Gamma 是位宽缩减出口，**bypass 只能关曲线、不能关位宽**（下游要 8bit）→ 旁路 = 线性 10→8（`(v+2)>>2`）
+
+**验证**：协议 TB 6 场景 **[PASS]** 1728=1728；**RAMP TB（穷举 x=0..1023，查表 + bypass 两轮）[PASS]** 2048/2048；真图 TB（M3→CCM→Gamma 三级串联）**[PASS]** 11536/11536。
+
+| 判据 | 结果 |
+|---|---|
+| **① LUT 全表覆盖**（RTL 穷举 vs .coe 逐项） | **1024 项全覆盖，0 误差**（不是抽样） |
+| **② 单调性 + 端点** | 单调不减 ✓；`LUT[0]=0`、`LUT[1023]=255` ✓ |
+| **②b bypass 穷举**（1024 值 vs Python 独立算 `min(round(v/4),255)`） | **0 误差** |
+| ③ 真图位级全等 | **11536 像素全等 0 误差** |
+| **④ 亮度量化**（8bit 域） | 线性直通均值 **101.34** → Gamma 均值 **164.77**（**+62.6%**） |
+
+对比图 [gamma_compare.png](Gamma/gamma_compare.png)（线性直通 vs Gamma）、曲线图 [gamma_curve.png](Gamma/gamma_curve.png)。
+
+**踩坑（四条）**：① **★ bypass 线性转换缺饱和 → 最亮的两个值回绕成黑**（`(v+2)>>2` 在 v=1022/1023 得 256，超 8bit 截位成 0）——**用户提问挖出的真 bug**；TB 之所以没抓到，是因为**期望函数用了同一个表达式**（golden 与 DUT 共享 bug 的经典盲区），现已补"bypass 穷举 + Python 独立算"判据；② **TB 里两个 `initial` 分开 `$fopen` 时后一个句柄写入全丢**（文件建了但 0 字节）→ 合并进同一个 `initial`；③ iverilog：移位量用无宽度常量时拼接操作数被判"宽度不定"；④ 伪代码资源估算要逐行核算（`256×8=2048bit` 写成"半个 BRAM18"实际 11%，且漏了三通道读口）。
+
+文档：[Gamma/README.md](Gamma/README.md) · 计划 [Gamma实现计划.md](Gamma/Gamma实现计划.md)
+
+---
+
+### SHARPEN · USM 锐化（M5.1，感知域 RGB888）
+
+ISP 链**最后一级**（M5.1）。输入 = M4-3 Gamma 出的 **RGB888 24bit 简流**，输出同格式。算法：USM `out = clip(orig + k·(orig − blur))`，blur 用 3×3 高斯（复用降噪空间核，**0 乘法器**）。定点化推导见 [Sharpen实现计划.md](Sharpen/Sharpen实现计划.md)。
+
+- **感知域归属**：锐化放在 **Gamma 之后**——位宽缩减（10→8）已完成，锐化作用在最终显示值上；若在 10bit 线性域做，会把 Gamma 的量化台阶一起放大
+- **★ 定点技巧（本模块最值得记的一条）**：修正量 `k·(orig−blur)` 用**"符号-幅值"两路**，不用有符号乘 + 算术右移——
+  `d=|orig−blur|`，`adj=(d·k_gain + 2^7)>>8`，`out = orig ± adj`。原因：① Verilog 里 **signed 与无符号常量相加会把整式翻成无符号**（经典坑）；② 负数算术右移是 **floor** 而非就近取整，同一组数据会与"幅值就近"差 1 LSB。幅值两路语义唯一、Python golden 照写即天然位级同构
+- **强度 k 参数化**：`k = k_gain / 2^8`，`k_gain` **10bit 端口**（默认 128 → k=0.5，范围 k∈[0,3.996]）
+- **资源**：0 乘法器（高斯）+ 3 个 `8bit×10bit` 修正量乘法；1 个 BRAM 系行缓存（复用 `line_buffer_fifo_nxn`）；**核 LAT=2、处理路径总延迟 3**（窗口寄存器 1 + 核 2）
+- **bypass = 排空点切换**（与 CCM/Gamma 等延迟旁路形成对比）：处理路径含行缓存、延迟上千拍，旁路只几拍 ⇒ 帧中间热切换必错位 ⇒ 只能"停源→排空→切→再发"；**同理 `k_gain` 也是帧级参数**，改动必须落在排空点
+
+**验证**：small 协议 TB（四场景 + bypass 三段，`k_gain=128`）**[PASS]** 1536/1536；**K64 TB**（`k_gain=64`）**[PASS]** 1536/1536（覆盖 k 端口）；IMG 四级串联（M3→CCM→Gamma→锐化）**[PASS]** 11536/11536；Python 独立复算**位级全等 0 误差**。
+
+| 指标（112×103，k=0.5） | 原图（Gamma 出） | 锐化（RTL） | 变化 |
+|---|---|---|---|
+| Tenengrad（平均梯度幅值） | 46.85 | 51.21 | **+9.3%** |
+| 平均 \|Laplacian\| | 8.16 | 11.08 | **+35.7%** |
+| PSNR(原图, 锐化图) | — | — | **39.30 dB** |
+
+边缘区（Sobel>60 的 29.1% 像素）平均 \|Δ\| 2.85 > 全图 1.48 ⇒ 锐化集中在边缘。对比图 [sharpen_compare.png](Sharpen/sharpen_compare.png)。
+
+**★ OOC 时序（Vivado 2021.2，`xcvu19p-fsva3824-2-e` @150 MHz）**：原设计（LAT=1、行缓存 pad mux 直连核）**35 逻辑级 / WNS −1.930 ns ❌**；按"显式定位宽 + 窗口寄存器 + 核 LAT 1→2"拆流水后 **15 级 / WNS +2.583 ns ✅**，三模式 TB 重跑仍位级 0 误差。复现脚本 [synth_ooc_timing.tcl](synth_ooc_timing.tcl)，报告由脚本生成在 `synth_rpt/`（本地产物，未入库）。**对照实验**：`ccm_stage`（**无行缓存**、LAT=2）只有 8 级 / +4.748 ns ⇒ 病因定位为"行缓存 pad mux（组合）+ 吃窗口的核"挤在同一拍，**与是否用 function 无关**。
+
+文档：[Sharpen/README.md](Sharpen/README.md) · 计划 [Sharpen实现计划.md](Sharpen/Sharpen实现计划.md)
+
+---
+
+### AXISOUT · 出端 AXIS 适配（M5.1，简流 RGB888 → VDMA S2MM）
+
+8 级 ISP 链路的**出口一级**（架构图上的 `[出端适配+出端FIFO]`）：把链路内部的**简流**转成 **标准 AXI4-Stream**，并带一块**弹性 FIFO** 做速率匹配 + 反压缓冲。设计与契约逐条见 [AxisOut实现计划.md](AxisOut/AxisOut实现计划.md)。
+
+- **转换本身很薄，硬件价值全在弹性 FIFO**：简流与 AXIS 只差字段命名 + sideband，握手语义一致（同拍消费）⇒ 复用 **M0.5 的 `axis_stream_fifo`**（FWFT + `{tuser,tlast,tdata}` 同拍打包 ⇒ 数据与语义不错位）
+- **字段映射**：`in_sof→tuser`（帧首）、`in_eol→tlast`（行末）、**`tkeep ≡ 3'b111`**（RGB888 = 3 满字节，纯常数）
+- **CDC 留集成阶段**（计划假设 2）：单级仿真同频；上板把 FIFO 换成"AXIS Data FIFO IP + 独立时钟"即得异步弹性，字段映射零改动
+
+**验证（S2MM 契约逐条）**：TB（`DEPTH=16` 故意取小，四数据场景 + 复位场景）**[PASS]** fire **3072** = 收 **3072**、帧 **16**、行 **192**、断言零违例；`verify_axis_out.py` 独立解析真实 AXIS 流：`tdata` 序列全等 0 误差、`tkeep` 恒 111、`tuser`/`tlast` 位置全对。
+
+| 契约 | 结果 |
+|---|---|
+| 每帧首拍 `tuser=1` / 每行末拍 `tlast=1` | ✅ |
+| `tkeep ≡ 3'b111` | ✅ |
+| 帧数 = NFRAME、行数 = NFRAME×H（HSIZE/VSIZE 与分辨率一致） | ✅ |
+| `tvalid=1 && tready=0` 载荷稳定（用上一拍 ready）/ 复位期 `tvalid=0` | ✅ |
+| 反压零丢数（源序列逐字全等） | ✅ |
+
+文档：[AxisOut/README.md](AxisOut/README.md) · 计划 [AxisOut实现计划.md](AxisOut/AxisOut实现计划.md)
+
 ---
 
 ## 目录结构
@@ -645,7 +727,7 @@ image_fpga_study/
 │   ├── axis_stream_fifo.v / tb_axis_stream_fifo.v  # AXIS Data FIFO（侧带打包）
 │   ├── sim_log.txt / sim_log_axis.txt
 │   └── README.md
-├── fifo行缓存与8级ISP链路实施计划.md   # Month-2 里程碑计划（M0~M5）
+├── fifo行缓存与8级ISP链路实施计划.md   # Month-2 里程碑计划（M0~M6）
 ├── CSC/                       # W2 RGB→YCbCr 色彩空间转换
 │   ├── 3stage/                #   乘法器 4 级流水版（主版本）
 │   ├── 3stage_selftest/       #   参数化自测版
@@ -710,6 +792,22 @@ image_fpga_study/
 │   ├── make_ccm_data.py / verify_ccm.py / ccm_coef.coe
 │   ├── ccm_compare.png / ccm_chart_compare.png
 │   ├── 伪代码.c / CCM实现计划.md / README.md
+├── Gamma/                     # M4-3 伽马校正（10bit→RGB888，全链位宽缩减唯一出口）
+│   ├── gamma_core.v / gamma_stage.v
+│   ├── tb_gamma.v
+│   ├── make_gamma_data.py / verify_gamma.py / gamma_lut.coe
+│   ├── gamma_compare.png / gamma_curve.png
+│   ├── 伪代码.c / Gamma实现计划.md / README.md
+├── Sharpen/                   # M5.1 USM 锐化（感知域 RGB888，bypass 排空点切换）
+│   ├── sharpen_core.v / sharpen_stage.v
+│   ├── tb_sharpen.v
+│   ├── make_sharpen_data.py / verify_sharpen.py
+│   ├── sharpen_compare.png
+│   ├── Sharpen实现计划.md / README.md
+├── AxisOut/                   # M5.1 出端 AXIS 适配（简流 RGB888 → VDMA S2MM + 弹性 FIFO）
+│   ├── axis_out_adapter.v / tb_axis_out_adapter.v
+│   ├── make_axis_out_data.py / verify_axis_out.py
+│   ├── AxisOut实现计划.md / README.md
 └── README.md                  # 本文档
 ```
 
@@ -784,6 +882,23 @@ vvp tb_s_b.vvp > sim_log_s_b.txt                           # 协议 TB（加 -DM
 python make_dpc_demosaic_data.py --img                     # 真图链：BLC后+60坏点 -> 期望+PSNR+对比图
 iverilog -o tb_i_b.vvp -DNOVCD -DIMG -I . -I ..\line_buffer\line_buffer_fifo_nxn -I ..\fifo tb_bayer_dpc_demosaic.v
 vvp tb_i_b.vvp > sim_log_i_b.txt                           # 图像 TB（-DMHC 同理）
+
+# 10. 锐化 + 出端 AXIS 适配（Month-2 M5.1）
+cd ../Sharpen
+python make_sharpen_data.py                                # 协议期望（kg=128 + kg=64）
+iverilog -o tb_s.vvp -DNOVCD -I . -I ..\line_buffer\line_buffer_fifo_nxn -I ..\fifo tb_sharpen.v
+vvp tb_s.vvp > sim_log.txt                                 # ★ 一律在看门狗下跑：python ..\CCM\_run_wd.py vvp tb_s.vvp
+iverilog -o tb_k.vvp -DNOVCD -DK64 -I . -I ..\line_buffer\line_buffer_fifo_nxn -I ..\fifo tb_sharpen.v
+vvp tb_k.vvp > sim_log_k.txt                               # k 参数化模式（kg=64）
+python make_sharpen_data.py --img                          # 真图链：M3→CCM→Gamma→锐化 + golden
+iverilog -o tb_i.vvp -DNOVCD -DIMG -I . -I ..\line_buffer\line_buffer_fifo_nxn -I ..\fifo tb_sharpen.v
+vvp tb_i.vvp > sim_log_img.txt
+python verify_sharpen.py                                   # 位级 + 锐度量化 + PSNR + sharpen_compare.png
+cd ../AxisOut
+python make_axis_out_data.py                               # 源序列
+iverilog -o tb_ao.vvp -DNOVCD -I . -I ..\fifo tb_axis_out_adapter.v
+vvp tb_ao.vvp > sim_log.txt                                # S2MM 契约逐条核对
+python verify_axis_out.py                                  # 独立解析真实 AXIS 流复算契约
 ```
 
 查看波形：`gtkwave tb_x.vcd`
@@ -830,6 +945,19 @@ vvp tb_i_b.vvp > sim_log_i_b.txt                           # 图像 TB（-DMHC �
 - **系数定点化要与运行时同一套舍入规则**：Python `round()` 是银行家舍入（`round(0.5)=0`、`round(2.5)=2`），与硬件 `+2^(F-1) 再 >>F`（round-half-up）不一致 → golden 与 RTL 会对不上。统一用 `floor(x·2^F+0.5)`
 - **行和 = 1 的矩阵要"残差补对角项"**：`round(M·2^F)` 后行和可能差 1LSB（如 7045−2540−410=4095≠4096）→ 灰阶带 1/4096 固定偏色。把残差补到对角项（|系数|最大 → 相对误差最小）⇒ 行和精确=2^F ⇒ 灰阶逐位保持（CCM 实测 v=0..1023 全保持）
 - **复用 TB 模板先对齐"跨语言文件名约定"**：M4-2 抄降噪 TB 时，Python 生成 `ccm_img_out.hex` 而 TB 读 `exp_img.hex` → `$readmemh` 读空、期望全 0、11536 全错。多模式共用 dump 文件名也会互相覆盖（改成按模式区分）
+- **iverilog：移位量是无宽度常量时，拼接操作数被判"宽度不定"**（M4-3 实锤）：`{ (v0+2)>>2, (v1+2)>>2 }` 报 `Concatenation operand has indefinite width` 直接编译失败。**修法**：先算进定宽 `reg`/`wire` 再拼接。凡"拼接 + 移位/无宽度常量"组合都要先定宽
+- **bypass 的语义要按模块单独定义，不能照抄**：CCM 是"数据直通"，但 **Gamma 是位宽缩减出口**（30bit→24bit）——bypass 只能关曲线、不能关位宽，否则下游契约被破坏。TB 期望也要跟着现算（`lin8p()`），不能直接拿输入当期望
+- **LAT=1 的冻结要"有使能用使能"**：BRAM 自带输出寄存器 + 读使能（EN）→ 直接把 `run_en` 接读使能，冻结时输出原地保持；**只有在没有现成使能可用时才需要 `hold_in`**（M3 DPC 那种）。同为 LAT=1，做法不同
+- **伪代码/文档里的资源估算要逐行核算**：`256×8 = 2048 bit` 被写成"半个 BRAM18"（实际只占 18432 bit 的 11%）；且"一张表"漏了**三通道要三个并行读口 → 3 份副本**。估算要写单位、对齐器件原语容量，否则选型结论会偏
+- **★ 位宽缩减/换算一律要饱和，且"TB 期望禁止照抄 DUT 表达式"**（M4-3 实锤，用户提问挖出）：`(v + 2) >> 2` 在 v=1022/1023 时得 **256**，赋给 8bit 直接**回绕成 0**（最亮像素变纯黑）。真正危险的是**自检 TB 抓不到**——因为 TB 期望里写的是**同一个表达式**，两边同错 → 逐位比对"通过"。**规矩**：① 任何"截位/移位/缩放"之后都要问一句"最大值会不会溢出"；② 关键换算的期望模型**必须由 Python 独立重写**（不许照抄 RTL 表达式），并对**边界值穷举**（本例 v=0..1023 全跑）
+- **TB 里多个 `$fopen` 要放进同一个 `initial` 块**：M4-3 遇到"文件被创建但 **0 字节**"、而 `$fwrite` 调用计数正常（1024）——两个 `initial` 分开 `fopen` 时后一个句柄写入全丢。定位手段：加**写计数打印** + 打印**句柄值**（"文件建了但没内容"要同时看这两项）
+- **负数算术右移是 floor，不是就近取整**（M5.1 锐化）：即使上一条把符号都对齐了，`signed_prod >>> F` 对负数是向 −∞ 取整；而 golden 常按"幅值就近取整"写 → 逐位比对差 1 LSB。**规避**：把"带符号乘 + 算术右移"改写成**符号-幅值两路**（`d=|a−b|`、`adj=(d·k+rnd)>>F`、`out = a±adj`），无任何 signed 运算，RTL 与 Python 天然同构（锐化 USM 修正量即此写法）
+- **帧级参数（bypass / 强度 k / 增益）改动必须落在排空点**（M5.1 补充）：参数若在核里生效，而像素到达核的时间晚于进入行缓存 `K·W+K` 拍 ⇒ 在帧边界附近改参数会让帧头/帧尾串用两个值。TB 的规避做法是"整轮常量参数 + 另开一个编译模式（`-DK64`）单独覆盖该端口"
+- **★「仿真全过」≠「时序能收敛」**（M5.1 实锤，最重要的一条）：iverilog 只验功能。M4/M5.1 的降噪/锐化功能位级 0 误差，但 **OOC 综合实测 `sharpen_stage` 35 逻辑级 / WNS −1.930ns、`denoise_stage` 40 级 / −5.804ns（@150MHz，均违例）**。**规矩**：每级 RTL 交付前做一次 OOC 综合预检（脚本 [synth_ooc_timing.tcl](synth_ooc_timing.tcl)），并且**顶层必须取 `xxx_stage` 而不是 `xxx_core`**——关键路径起点在行缓存的 `lc_r/lc_c_reg`。
+- **吃窗口的核不能与行缓存 pad mux 挤在同一拍**（M5.1）：行缓存的 `sel_row/sel_col` + 9:1 pad mux 是**组合**的，与核内加法树/乘法/饱和叠加后路径爆炸（35 级）。**修法**：在 `*_stage` 里对 `lb_win` 插一级窗口寄存器（**别改共用的 `line_buffer_fifo_nxn`**，否则 M1/M3 已验证的 FIFO 占用不变式要全部重验），+ 核内拆流水。锐化 35→15 级 / WNS −1.930→**+2.583ns ✅**。**定位手法**：拿一个**没有行缓存**的同级模块（`ccm_stage`：8 级 / +4.748ns）做对照，一眼看出病因是"pad mux + 核"而不是"用了 function"。
+- **未定宽常量会把整条表达式抬到 32 位**（M5.1）：`2*(...)`、`4*p4`、`x + (1<<7)`、`res > 255` 里的字面常量都是 **32bit**，按 Verilog 上下文位宽规则会把整个表达式撑到 32 位 ⇒ 宽加法器 / 宽比较器，逻辑级数和布线一起变差。**修法**：先算进**定宽中间量**（`reg [11:0]`），乘 2/4 用**移位**，round 常量做 `localparam [W-1:0] RND`，饱和比较改成"高位是否非零"（`|res[hi:DW]`）
+- **`edge` 是 Verilog 保留字**（M5.1）：函数里把局部变量命名成 `edge`（`posedge`/`negedge` 的词根）会被 iverilog 直接报 `syntax error`——这类"看起来很像普通单词"的保留字要留意
+- **DSP48 会偷偷把周边逻辑吸进自己的组合 ALU**（M5.1 实测）：`denoise_stage` 的 34 级里有 **17 级落在 `DSP_ALU=9` + `DSP_OUTPUT=8`**——综合器把乘法的 round/饱和整段塞进了 DSP 的组合旁路。**修法**：在乘法输出**显式加一级寄存器**（RTL 里写 `prod_q <= a*b;`），阻止被吸收；或用 DSP 内部流水寄存器
 
 ---
 

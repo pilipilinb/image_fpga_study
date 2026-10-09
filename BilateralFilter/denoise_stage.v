@@ -41,10 +41,19 @@ module denoise_stage #(
 );
 
     localparam CW = 3*DW;      // 打包位宽 30bit
+    // ★【步 1/2 · 拆流水】处理路径总延迟 = 窗口寄存器(1) + 核流水(6) = 7
+    //   原设计核 LAT=3、但行缓存 pad mux（sel_row/sel_col + 9:1 mux，组合）直接接核输入
+    //   ⇒ OOC 实测 40 级 / WNS −5.804ns @150MHz（其中 17 级被塞进 DSP 内部组合旁路）。
+    //   本例修法：① 在"行缓存输出→核"之间插一级窗口寄存器（不动共用的
+    //   line_buffer_fifo_nxn，保护 M1/M3 占用不变式）→ 34 级 / −4.258ns；
+    //   ② 核内再拆三刀（LUT 出口寄存 wr/窗口、乘法输出寄存乘积、加树中间寄存）→ LAT 3→6。
+    localparam LAT_CORE = 6;   // ★ 必须与 denoise_bilateral_core 的流水级数一致
+    localparam LAT_WIN  = 1;   // 窗口寄存器
+    localparam LAT      = LAT_WIN + LAT_CORE;   // = sof/eol 对齐链深度（=7）
 
     // ---- 行缓存（pad 全尺寸 + 反压）----
-    wire             lb_valid, lb_sof, lb_eol, lb_ready;
-    wire             lb_inready;               // 行缓存的接纳节拍（造行期=0，★必须用这个门控源）
+    wire              lb_valid, lb_sof, lb_eol, lb_ready;
+    wire              lb_inready;               // 行缓存的接纳节拍（造行期=0，★必须用这个门控源）
     wire [N*N*CW-1:0] lb_win;
 
     line_buffer_fifo_nxn #(
@@ -71,11 +80,25 @@ module denoise_stage #(
     wire        ostall;
     assign lb_ready = !ostall;
 
+    // ---- ★ 步 1：窗口寄存器（切在 pad mux 之后、核之前）----
+    //   lb_ready = !ostall ⇒ ostall 时行缓存输出本身冻结，此处同步冻结即保持对齐
+    reg [N*N*CW-1:0] win_q;
+    reg              wv_q;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            win_q <= {N*N*CW{1'b0}};
+            wv_q  <= 1'b0;
+        end else if (!ostall) begin
+            win_q <= lb_win;
+            wv_q  <= lb_valid;
+        end
+    end
+
     // ---- 双边核（LAT=3；run_en=反压门控全局冻结）----
     denoise_bilateral_core #(.DW(DW)) u_core (
         .clk(clk), .rst_n(rst_n),
-        .win_flat(lb_win),
-        .win_valid(lb_valid),
+        .win_flat(win_q),
+        .win_valid(wv_q),
         .run_en(!ostall),
         .dout(core_dt),
         .dout_valid(core_dv)
@@ -117,15 +140,19 @@ module denoise_stage #(
 
     assign ostall = (bypass ? byp_v : core_dv) && !out_ready;
 
-    // ---- sof/eol 对齐：处理路径打 3 拍（与核 LAT 对齐；bypass 路径已在延迟链里）----
-    reg sof_c0, sof_c1, sof_c2, eol_c0, eol_c1, eol_c2;
+    // ---- sof/eol 对齐：处理路径打 LAT 拍（窗口寄存器 1 + 核 6 = 7，与 core_dv 对齐）----
+    //   ★ 深度必须 = LAT_WIN + LAT_CORE；漏一级/多一级都会让 sof/eol 与数据错位
+    reg sof_c0, sof_c1, sof_c2, sof_c3, sof_c4, sof_c5, sof_c6;
+    reg eol_c0, eol_c1, eol_c2, eol_c3, eol_c4, eol_c5, eol_c6;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            {sof_c0, sof_c1, sof_c2} <= 0;
-            {eol_c0, eol_c1, eol_c2} <= 0;
+            {sof_c0, sof_c1, sof_c2, sof_c3, sof_c4, sof_c5, sof_c6} <= 7'b0;
+            {eol_c0, eol_c1, eol_c2, eol_c3, eol_c4, eol_c5, eol_c6} <= 7'b0;
         end else if (!ostall) begin
-            sof_c0 <= lb_sof;  sof_c1 <= sof_c0;  sof_c2 <= sof_c1;
-            eol_c0 <= lb_eol;  eol_c1 <= eol_c0;  eol_c2 <= eol_c1;
+            sof_c0 <= lb_sof; sof_c1 <= sof_c0; sof_c2 <= sof_c1; sof_c3 <= sof_c2;
+            sof_c4 <= sof_c3; sof_c5 <= sof_c4; sof_c6 <= sof_c5;
+            eol_c0 <= lb_eol; eol_c1 <= eol_c0; eol_c2 <= eol_c1; eol_c3 <= eol_c2;
+            eol_c4 <= eol_c3; eol_c5 <= eol_c4; eol_c6 <= eol_c5;
         end
     end
 
@@ -134,8 +161,8 @@ module denoise_stage #(
     // ---- 出口 mux（排空点切换后选边）----
     assign out_valid = bypass ? byp_v   : core_dv;
     assign out_data  = bypass ? byp_dt  : core_dt;
-    assign out_sof   = bypass ? byp_sof : sof_c2;
-    assign out_eol   = bypass ? byp_eol : eol_c2;
+    assign out_sof   = bypass ? byp_sof : sof_c6;
+    assign out_eol   = bypass ? byp_eol : eol_c6;
 
 endmodule
 

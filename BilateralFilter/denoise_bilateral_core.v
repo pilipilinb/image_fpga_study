@@ -1,5 +1,5 @@
 // ============================================================================
-// denoise_bilateral_core.v —— 双边滤波降噪核（线性 RGB 域，10bit×3，LAT=3）
+// denoise_bilateral_core.v —— 双边滤波降噪核（线性 RGB 域，10bit×3，LAT=6）
 //
 // 算法（与 make_denoise_data.py 的 bilateral_ref 位级同构，见工程要点.md）：
 //   d   = |ΔR|+|ΔG|+|ΔB|（L1，≤3069）
@@ -15,14 +15,19 @@
 //     三个通道共用（den 只开一个）；den 下界 252 = 中心项 spatial4×wr63 恒存在
 //   ③ round-half-up：+2^19 再 >>20，无偏置
 //
-// 【流水 LAT=3（拍级安排）】
-//   T0 组合：9 邻居各自 d → 值域 LUT **异步读**（分布式 ROM；单数组 9 读口，
-//           综合器自动做 read-port replication）→ wr → w×v（27 个 8×10 小乘）
-//           → 加树 → numR/G/B/den 组合值
-//   T1 末：num/den 寄存（第 1 拍）
-//   T2：addr = den−252 → 倒数 ROM 同步读（BRAM，1 拍）→ T2 末 inv_r；num 同拍打 → num_q
-//   T3：乘+round+移位+饱和（组合）→ T3 末输出寄存 = dout
-//   ★ 上板时序紧的拆法：LUT 改同步读拆一级（LAT=4）——文档面试点
+// 【流水 LAT=6（拆流水后；原设计 LAT=3，OOC 实测 40 级 / WNS −5.804ns @150MHz 不收敛）】
+//   T0 组合：从 win_q 起，9 邻居各自 d → 值域 LUT **异步读**（分布式 ROM；单数组 9 读口，
+//           综合器自动做 read-port replication）→ wr
+//   E1 末（★新增）：wr 与窗口像素 W_r 各寄存一拍 —— 切掉 d9 + LUT 读
+//   E2：w×v（27 个 8×10 小乘，映射进 DSP）→ 加树**分两段**（taps0-4 / taps5-8）→ 各寄存
+//   E3 末：两段合并 → num/den 寄存（原 T1）
+//   E4：addr = den−252 → 倒数 ROM 同步读（BRAM，1 拍）→ inv_r；num 同拍打 → num_q（原 T2）
+//   E5 末（★新增）：乘积 pr_r ≤ num_q × inv_r 单独寄存 —— 阻止 DSP 把 round/饱和吸进组合 ALU
+//   E6：round+移位+饱和（组合）→ 输出寄存 = dout
+//   ★ 为什么必须显式插寄存器：DSP48 的 ALU/输出级既能当逻辑也能当寄存器；不给显式寄存器时，
+//     综合器会把整条"乘加 + round + 饱和"塞进**级联的 DSP**（PCIN→PCOUT 每跳 ≈0.68ns，
+//     9 项加树 = 8 跳 ≈5.5ns）→ 反而成为瓶颈。详见 README「时序收敛实战」。
+//   ▲ 每加/删一级，必须同步改 denoise_stage 的 LAT_CORE 与 sof/eol 对齐链深度
 //
 // 【乘法位宽（上界证明）】
 //   num ≤ den×1023（每项 w×v ≤ w×1023，Σw=den）恒成立
@@ -59,7 +64,7 @@ module denoise_bilateral_core #(
     //========================================================================
     // 系数表（$readmemh 与 Python golden 同源生成——消除浮点/定点不一致）
     //========================================================================
-    (* ram_style = "distributed" *) reg [5:0] range_lut [0:(1<<LUT_AW)-1];
+    (* ram_style = "distributed" *) reg [5:0] range_lut [0:(1<<LUT_AW)-1];// 左移10位，得到一个1024容量的6bit元素
     initial $readmemh("range_lut.coe", range_lut);
     (* ram_style = "block" *)       reg [12:0] inv_rom [0:(1<<ROM_AW)-1];
     initial $readmemh("inv_rom.coe", inv_rom);
@@ -74,7 +79,7 @@ module denoise_bilateral_core #(
             assign W[g] = win_flat[g*3*DW +: 3*DW];
         end
     endgenerate
-
+// 3x3 窗口，W[4]是中心点
     wire [DW-1:0] cR = W[4][3*DW-1:2*DW];
     wire [DW-1:0] cG = W[4][2*DW-1:  DW];
     wire [DW-1:0] cB = W[4][  DW-1:    0];
@@ -100,38 +105,92 @@ module denoise_bilateral_core #(
     wire [DW-1:0] vB [0:8];
     wire [2*DW:0] d9 [0:8];
     wire [5:0]    wr [0:8];
+    reg  [5:0]      wr_r [0:8];    // ★ 拆流水 A：值域权重寄存一拍（切掉 d9+LUT 读）
+    reg  [3*DW-1:0] W_r  [0:8];    // ★ 拆流水 A：窗口像素寄存一拍（与 wr_r 同拍对齐）
+    reg             vld_a;         // ★ 拆流水 A 的 valid
     genvar gi;
     generate
         for (gi = 0; gi < 9; gi = gi + 1) begin : g_px
-            assign vR[gi] = W[gi][3*DW-1:2*DW];
-            assign vG[gi] = W[gi][2*DW-1:  DW];
-            assign vB[gi] = W[gi][  DW-1:    0];
-            assign d9[gi] = l1_3ch(vR[gi], vG[gi], vB[gi], cR, cG, cB);
+            // ---- T0（组合）：从 win_q 直接算三通道 L1 距离 + 查值域 LUT ----
+            wire [DW-1:0] vR0 = W[gi][3*DW-1:2*DW];
+            wire [DW-1:0] vG0 = W[gi][2*DW-1:  DW];
+            wire [DW-1:0] vB0 = W[gi][  DW-1:    0];
+            assign d9[gi] = l1_3ch(vR0, vG0, vB0, cR, cG, cB);
             // LUT 地址保护：d 12bit > 地址 9bit，越界 mux 在地址进 ROM 之前
             wire [LUT_AW-1:0] lut_a = (d9[gi] > CUT) ? {LUT_AW{1'b0}} : d9[gi][LUT_AW-1:0];
             assign wr[gi] = (d9[gi] > CUT) ? 6'd0 : range_lut[lut_a];
+
+            // ---- ★ 拆流水 A：wr 与窗口各寄存一拍 ----
+            //   OOC 实测：原 T0 把"L1 绝对差树 + LUT 异步读 + 27 乘法 + 加树"全压在一拍
+            //   （40 逻辑级 / WNS −5.804ns @150MHz）。此处在 LUT 出口切一刀，
+            //   并把像素窗口同拍寄存（否则乘法拿到的像素与权重错拍）。
+            always @(posedge clk or negedge rst_n) begin
+                if (!rst_n) begin
+                    wr_r[gi] <= 6'd0;
+                    W_r[gi]  <= {3*DW{1'b0}};
+                end else if (run_en) begin
+                    wr_r[gi] <= wr[gi];
+                    W_r[gi]  <= W[gi];
+                end
+            end
+            // 乘法用的像素值取自**寄存后的窗口**（与 wr_r 严格同拍对齐）
+            assign vR[gi] = W_r[gi][3*DW-1:2*DW];
+            assign vG[gi] = W_r[gi][2*DW-1:  DW];
+            assign vB[gi] = W_r[gi][  DW-1:    0];
         end
     endgenerate
 
-    // w = spatial×wr（1/2/4 移位，0 乘法器）
-    wire [DW+7:0] w0 = {3'd0, wr[0]};        // ×1
-    wire [DW+7:0] w1 = {2'd0, wr[1], 1'b0};  // ×2
-    wire [DW+7:0] w2 = {3'd0, wr[2]};        // ×1
-    wire [DW+7:0] w3 = {2'd0, wr[3], 1'b0};  // ×2
-    wire [DW+7:0] w4 = {1'd0, wr[4], 2'b0};  // ×4（中心）
-    wire [DW+7:0] w5 = {2'd0, wr[5], 1'b0};  // ×2
-    wire [DW+7:0] w6 = {3'd0, wr[6]};        // ×1
-    wire [DW+7:0] w7 = {2'd0, wr[7], 1'b0};  // ×2
-    wire [DW+7:0] w8 = {3'd0, wr[8]};        // ×1
+    // 拆流水 A 的 valid 打拍（与 wr_r/W_r 同行）
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) vld_a <= 1'b0;
+        else if (run_en) vld_a <= win_valid;
+    end
 
-    // w×v（8×10 乘）+ 9 项加树
-    wire [2*DW+7:0] nR = w0*vR[0] + w1*vR[1] + w2*vR[2] + w3*vR[3] + w4*vR[4] +
-                        w5*vR[5] + w6*vR[6] + w7*vR[7] + w8*vR[8];
-    wire [2*DW+7:0] nG = w0*vG[0] + w1*vG[1] + w2*vG[2] + w3*vG[3] + w4*vG[4] +
-                        w5*vG[5] + w6*vG[6] + w7*vG[7] + w8*vG[8];
-    wire [2*DW+7:0] nB = w0*vB[0] + w1*vB[1] + w2*vB[2] + w3*vB[3] + w4*vB[4] +
-                        w5*vB[5] + w6*vB[6] + w7*vB[7] + w8*vB[8];
-    wire [9:0]      dn = w0 + w1 + w2 + w3 + w4 + w5 + w6 + w7 + w8;   // ≤1008
+    // w = spatial×wr_r（1/2/4 移位，0 乘法器）
+    wire [DW+7:0] w0 = {3'd0, wr_r[0]};        // ×1
+    wire [DW+7:0] w1 = {2'd0, wr_r[1], 1'b0};  // ×2
+    wire [DW+7:0] w2 = {3'd0, wr_r[2]};        // ×1
+    wire [DW+7:0] w3 = {2'd0, wr_r[3], 1'b0};  // ×2
+    wire [DW+7:0] w4 = {1'd0, wr_r[4], 2'b0};  // ×4（中心）
+    wire [DW+7:0] w5 = {2'd0, wr_r[5], 1'b0};  // ×2
+    wire [DW+7:0] w6 = {3'd0, wr_r[6]};        // ×1
+    wire [DW+7:0] w7 = {2'd0, wr_r[7], 1'b0};  // ×2
+    wire [DW+7:0] w8 = {3'd0, wr_r[8]};        // ×1
+
+    // ---- ★ 拆流水 C：9 项加树从中间切开（组A = 5 项 / 组B = 4 项），中间插寄存器 ----
+    //   不加这一刀时，综合器把整条 9 项加树映射成 **DSP 的 PCIN/PCOUT 级联链（8 跳）**：
+    //   实测 21 级里 DSP_ALU=9 + DSP_OUTPUT=8，光 DSP 内部延迟就 6.87ns、route 只占 0.29ns
+    //   （WNS −0.520ns）。切成两段后每段最多 4 跳级联。
+    wire [2*DW+7:0] nRa = w0*vR[0] + w1*vR[1] + w2*vR[2] + w3*vR[3] + w4*vR[4];
+    wire [2*DW+7:0] nGa = w0*vG[0] + w1*vG[1] + w2*vG[2] + w3*vG[3] + w4*vG[4];
+    wire [2*DW+7:0] nBa = w0*vB[0] + w1*vB[1] + w2*vB[2] + w3*vB[3] + w4*vB[4];
+    wire [2*DW+7:0] nRb = w5*vR[5] + w6*vR[6] + w7*vR[7] + w8*vR[8];
+    wire [2*DW+7:0] nGb = w5*vG[5] + w6*vG[6] + w7*vG[7] + w8*vG[8];
+    wire [2*DW+7:0] nBb = w5*vB[5] + w6*vB[6] + w7*vB[7] + w8*vB[8];
+    wire [9:0]      dna = w0 + w1 + w2 + w3 + w4;   // ≤1008（10bit 足够）
+    wire [9:0]      dnb = w5 + w6 + w7 + w8;
+
+    reg [2*DW+1:0] nRa_r, nGa_r, nBa_r, nRb_r, nGb_r, nBb_r;
+    reg [9:0]      dna_r, dnb_r;
+    reg            vld_m;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            nRa_r <= 0; nGa_r <= 0; nBa_r <= 0;
+            nRb_r <= 0; nGb_r <= 0; nBb_r <= 0;
+            dna_r <= 10'd0; dnb_r <= 10'd0; vld_m <= 1'b0;
+        end else if (run_en) begin
+            nRa_r <= nRa; nGa_r <= nGa; nBa_r <= nBa;
+            nRb_r <= nRb; nGb_r <= nGb; nBb_r <= nBb;
+            dna_r <= dna; dnb_r <= dnb;
+            vld_m <= vld_a;
+        end
+    end
+
+    // 两段合并（定宽，各 ≤2^21）——合并本身只有 1 级加法，紧随其后的 T1 寄存
+    wire [2*DW+1:0] nR = nRa_r + nRb_r;
+    wire [2*DW+1:0] nG = nGa_r + nGb_r;
+    wire [2*DW+1:0] nB = nBa_r + nBb_r;
+    wire [9:0]      dn = dna_r + dnb_r;             // ≤1008
 
     //========================================================================
     // T1：num/den 寄存（run_en 门控）
@@ -147,7 +206,7 @@ module denoise_bilateral_core #(
             numG_r <= nG;
             numB_r <= nB;
             den_r  <= dn;
-            vld1   <= win_valid;
+            vld1   <= vld_m;      // ★ valid 跟着加树寄存级走
         end
     end
 
@@ -172,19 +231,34 @@ module denoise_bilateral_core #(
     end
 
     //========================================================================
-    // T3：乘 + round(+2^19) + >>20 + 饱和（组合）→ 输出寄存
-    //   乘积 21×13=34bit；上界 < 2^30（文件头证明）→ 取 [29:20] 为 10bit 结果；
-    //   饱和看高位 [33:30]（防御性——数学上恒 0）
+    // ★ 拆流水 B：乘法**单独寄存一拍**（阻止综合器把 round/饱和吸进 DSP 组合 ALU）
+    //   OOC 实测：原 T3 把"34bit 乘 + round + 饱和"全塞进 DSP 内部组合旁路
+    //   （34 级里有 17 级是 DSP_ALU=9 + DSP_OUTPUT=8）。在乘法输出打断即可。
+    //   乘积 21×13=34bit；上界 < 2^30（文件头证明）
     //========================================================================
-    wire [33:0] pr_full = numR_q * inv_r;
-    wire [33:0] pg_full = numG_q * inv_r;
-    wire [33:0] pb_full = numB_q * inv_r;
-    wire [29:0] pr30 = pr_full[29:0] + 30'h80000;           // +2^19 round-half-up
-    wire [29:0] pg30 = pg_full[29:0] + 30'h80000;
-    wire [29:0] pb30 = pb_full[29:0] + 30'h80000;
-    wire        satR = |pr_full[33:30];
-    wire        satG = |pg_full[33:30];
-    wire        satB = |pb_full[33:30];
+    reg [33:0] pr_r, pg_r, pb_r;
+    reg        vld3;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            pr_r <= 34'd0; pg_r <= 34'd0; pb_r <= 34'd0; vld3 <= 1'b0;
+        end else if (run_en) begin
+            pr_r <= numR_q * inv_r;
+            pg_r <= numG_q * inv_r;
+            pb_r <= numB_q * inv_r;
+            vld3 <= vld2;
+        end
+    end
+
+    //========================================================================
+    // T5：round(+2^19) + >>20 + 饱和（组合）→ 输出寄存
+    //   取 [29:20] 为 10bit 结果；饱和看高位 [33:30]（防御性——数学上恒 0）
+    //========================================================================
+    wire [29:0] pr30 = pr_r[29:0] + 30'h80000;           // +2^19 round-half-up
+    wire [29:0] pg30 = pg_r[29:0] + 30'h80000;
+    wire [29:0] pb30 = pb_r[29:0] + 30'h80000;
+    wire        satR = |pr_r[33:30]; //饱和溢出标志
+    wire        satG = |pg_r[33:30];
+    wire        satB = |pb_r[33:30];
     wire [DW-1:0] oR = satR ? {DW{1'b1}} : pr30[29:20];
     wire [DW-1:0] oG = satG ? {DW{1'b1}} : pg30[29:20];
     wire [DW-1:0] oB = satB ? {DW{1'b1}} : pb30[29:20];
@@ -195,7 +269,7 @@ module denoise_bilateral_core #(
             dout_valid <= 1'b0;
         end else if (run_en) begin
             dout       <= {oR, oG, oB};
-            dout_valid <= vld2;
+            dout_valid <= vld3;
         end
         // run_en=0（stall）：输出整组保持（简流稳定性）
     end
