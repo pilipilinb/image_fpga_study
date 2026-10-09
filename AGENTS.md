@@ -38,7 +38,7 @@
 3. **文档三件套**：每个新算法目录 = `README.md`（入口概览）+ 详细中文讲解文档（为什么这么设计 > 怎么用）+ 与全局 README 同任务内更新；踩坑必须记进文档和全局 README「已知问题」
 4. **验证规范（图像算法强制）**：TB 自检记分板（[PASS]/[FAIL] + 计数 + 超时兜底）+ Python 独立第二判据 + **对比图 + PSNR**（仿 BLC/Demosaic 链：真图 → hex → RTL → coe → PIL 出图）；TB 期望与 DUT 参数必须一致，优先层次引用 `dut.*`
 5. **跑 vvp 一律带看门狗**（内存/时间硬上限，PowerShell Start-Process + 轮询 WorkingSet64）——22.6GB 事件教训
-6. **git 备份**：用户要求推送时走 GitHub REST Git Data API（blob→tree→commit，token 读自 mcp.json）；PS1 脚本零中文字面量（PS5.1 无 BOM 会把中文读乱），用目录枚举规避；排除 `*.vvp/*.vcd/*.txt`
+6. **git 备份**：**本机到 `github.com` 的 TLS 时通时断**（实测 `curl https://github.com/` 20s 超时、HTTP 000，而 `api.github.com` 稳定 200 —— 同网段不同 IP，属常见限速/阻断）。推送策略：**能通时直接用 `git push`**（本地 `main` 已跟踪 `origin/main`，凭据缓存在 Windows 凭据管理器，无需 token）；**超时/连不上时用 REST 兜底**：`python _gh_push_files.py <提交信息文件> <文件...>`（走 api.github.com 的 Git Data API，实测稳定）。注意 REST 推送产生的提交与本地提交**内容相同但 SHA 不同**，网络恢复后 `git fetch` + `git reset --mixed origin/main` 即对齐。推送前确认 `.gitignore` 已覆盖 `*.vvp/*.vcd/*.txt` 与 `synth_rpt/`、`.trae/`（已配）；PS1 脚本零中文字面量（PS5.1 无 BOM 会把中文读乱）
 7. **通信**：中文；解释简洁直接（用户反感含糊）；逐模块详细中文注释（含定点化推导、踩坑记录）
 8. **波形调试**：优先用 wave-mcp（已装全局 MCP，`prepare_session`/`open_session` + ~27 个分析工具），别只靠断点
 9. **禁止请教专家**：用户要求时，必须自己解决，不能请专家。

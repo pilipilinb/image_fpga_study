@@ -1,13 +1,29 @@
-# 仿真与中间产物（遵循 LINE_BUFFER/.gitignore 惯例）
+# ===== 仿真/EDA 垃圾产物（不备份） =====
 *.vcd
 *.vvp
-*.v.out
-*.vsdx
+*.txt
+*.wdb
+*.jou
+*.log
+*.bak
+.Xil/
 xsim.dir/
-*.sdb
-*.rlx
-*.pb
-
-# 系统文件
+.cache/
+wave/
+# ===== 系统杂项 =====
 Thumbs.db
-Desktop.ini
+desktop.ini
+
+# ===== Python 缓存 =====
+*.pyc
+__pycache__/
+# ===== IDE/临时目录 =====
+.qoder/
+.tmp_wavedrom/
+.trae/
+# ===== Vivado OOC 综合预检产物（不入库；脚本 synth_ooc_timing.tcl 本身入库） =====
+synth_rpt/
+# ===== Vivado xvlog 编译产物 =====
+*.pb
+*.v.out
+*.w.out
