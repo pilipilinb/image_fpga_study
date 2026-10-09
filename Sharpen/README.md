@@ -192,6 +192,9 @@ python make_sharpen_data.py --img
 iverilog -o tb_i.vvp -DNOVCD -DIMG -I . -I ..\line_buffer\line_buffer_fifo_nxn -I ..\fifo tb_sharpen.v
 python ..\CCM\_run_wd.py vvp tb_i.vvp
 python verify_sharpen.py
+# 5) 硬切对照实验：帧中间切 bypass（不排空、不停源）→ 量化"被跳过的像素"
+iverilog -o tb_h.vvp -DNOVCD -DHARD -I . -I ..\line_buffer\line_buffer_fifo_nxn -I ..\fifo tb_sharpen.v
+python ..\CCM\_run_wd.py vvp tb_h.vvp          # 看 HARD-SOF 序列：切换那帧间隔 171 ≠ 192（少 21）
 ```
 
 ## 面试点清单

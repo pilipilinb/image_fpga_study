@@ -5,6 +5,8 @@
 //   -DIMG → sharpen_in.hex（Gamma 出 RGB888）/ exp_img.hex（锐化出）
 //   -DK64 → src_small.hex / exp_small_k64.hex（kg=64，验证 k 端口）
 //   否则  → src_small.hex / exp_small.hex（kg=128，5 帧）
+//   -DHARD → 硬切对照实验（**不比对 golden**）：主路跑到帧中间、不排空不停源直接切 bypass，
+//            量 out_sof 间隔（= 帧长）—— 稳态恒 192，硬切那一帧变 171（少 21 = 主路延迟）
 //
 // 场景（small 模式 5 帧）：A 满速 2 帧 / B 汇随机 50% / C 长拉低 / D 双向随机 / E bypass
 // IMG 模式：单帧连续流，只做期望比对
@@ -136,7 +138,11 @@ module tb_sharpen;
     reg [CW-1:0] cmp_exp, out_data_q;
     reg          ov_q = 0, rdy_q = 0;
     integer fd;
+`ifdef HARD
+    initial fd = $fopen("sharpen_hard.txt", "w");   // 硬切实验单独落盘，不覆盖 IMG 模式的比对数据
+`else
     initial fd = $fopen("sharpen_out.txt", "w");
+`endif
     always @(posedge aclk) begin
         #1;
         if (aresetn && start && in_valid && in_ready) begin
@@ -148,6 +154,7 @@ module tb_sharpen;
             end
         end
         if (out_valid && out_ready && start) begin
+`ifndef HARD
             cmp_exp = e_mode ? (bypass ? src[sidx] : exp[sidx]) : exp[rcv_cnt];
             if (!bypass && !e_mode) $fwrite(fd, "%06X\n", out_data);
             if (out_data !== cmp_exp) begin
@@ -164,6 +171,27 @@ module tb_sharpen;
                 err_cnt = err_cnt + 1;
                 if (err_cnt <= 8) $display("EOL-MISMATCH @%0t #%0d", $time, e_mode ? sidx : rcv_cnt);
             end
+`else
+            // ---- ★ 硬切实验：不比对 golden，只量"相邻两个 out_sof 之间隔了多少拍" ----
+            //   稳态下这个间隔恒 = TOTAL（帧长）；硬切那一帧必然 ≠ TOTAL。
+            out_fire = out_fire + 1;
+            if (out_sof) begin
+                if (sof_n > 0) begin            // 第 0 个 SOF 只作基准，不报间隔
+                    gap = out_fire - last_sof;
+                    if (gap < min_gap) min_gap = gap;
+                    if (gap == TOTAL)
+                        $display("HARD-SOF #%0d @out_fire=%0d  间隔=%0d  (正常帧长)", sof_n, out_fire, gap);
+                    else begin
+                        $display("HARD-SOF #%0d @out_fire=%0d  间隔=%0d  <<< 异常帧长！正常应 %0d（少 %0d 个像素；主路延迟 LAT_MAIN=%0d）",
+                                 sof_n, out_fire, gap, TOTAL, TOTAL - gap, LAT_MAIN);
+                        bad_gap_n = bad_gap_n + 1;
+                    end
+                end else
+                    $display("HARD-SOF #0  @out_fire=%0d  (基准)", out_fire);
+                last_sof = out_fire;
+                sof_n    = sof_n + 1;
+            end
+`endif
             rcv_cnt = rcv_cnt + 1;
             if (e_mode) sidx = sidx + 1;
         end
@@ -176,6 +204,14 @@ module tb_sharpen;
         rdy_q = out_ready;
         out_data_q = out_data;
     end
+
+`ifdef HARD
+    // ---- ★ 硬切实验的测量量（只在 -DHARD 下编译）----
+    integer  out_fire = 0, last_sof = 0, sof_n = 0, bad_gap_n = 0, min_gap = 999999;
+    integer  gap;
+    // 处理路径总延迟：行缓存 K·W+K（N=3 → K=1 → IMG_W+1）+ stage LAT 3 = IMG_W+4
+    localparam LAT_MAIN = (IMG_W + 1) + 3;
+`endif
 
     // ---------------- 场景流程 ----------------
     initial begin
@@ -193,6 +229,22 @@ module tb_sharpen;
         imode = 0; omode = 0; bypass = 0; kg = KG;
         snd_limit = TOTAL; start = 1;
         while (rcv_cnt < TOTAL) @(posedge aclk);
+        start = 0;
+`elsif HARD
+        // ★★ 硬切对照实验：主路跑到帧"中间"，不排空、不停源，直接把 bypass 翻成 1
+        //    预期：out_sof 的间隔在切换处突然变短（= TOTAL − 主路延迟），
+        //    证明那批像素不是"迟到"而是"被跳过"。
+        $display("=== 硬切实验：主路跑 2.5 帧 → 帧中间硬切 bypass=1（不排空、上游不停）===");
+        $display("    参考值：TOTAL=%0d（正常帧长）, 主路延迟 LAT_MAIN=%0d", TOTAL, LAT_MAIN);
+        imode = 0; omode = 0; bypass = 0; kg = KG;
+        // 注意：硬切会让"已发出"与"已收到"的计数永久差出 LAT_MAIN 个像素，
+        //   所以收数目标必须留足余量（否则输入已发完、输出永远追不上 → 超时兜底）。
+        snd_limit = 5*TOTAL; start = 1;
+        while (rcv_cnt < 2*TOTAL + TOTAL/2) @(posedge aclk);
+        $display(">>> 硬切点 @out_fire=%0d（当前帧才走了 %0d 拍，远未到帧尾）",
+                 rcv_cnt, TOTAL/2);
+        bypass = 1;                                   // ★ 硬切：不停源、不等排空
+        while (rcv_cnt < 4*TOTAL + TOTAL/2) @(posedge aclk);
         start = 0;
 `else
         $display("=== 场景A：满速 2 帧（kg=%0d）===", KG);
@@ -244,16 +296,24 @@ module tb_sharpen;
         $display("========================================");
 `ifdef IMG
         if (snd_cnt != TOTAL || rcv_cnt != TOTAL) err_cnt = err_cnt + 1;
+`elsif HARD
+        // 硬切实验：不做计数比对（输出按设计"跳过"了主路延迟个像素，属预期现象）
+        $display("统计：共 %0d 个 out_sof，其中异常帧长 %0d 个，最小间隔 %0d 拍（正常应 %0d）",
+                 sof_n, bad_gap_n, min_gap, TOTAL);
 `else
         // A~D 共 5 帧 + E 三段各 1 帧 = 8 帧
         if (snd_cnt != 8*TOTAL || rcv_cnt != 8*TOTAL) err_cnt = err_cnt + 1;
 `endif
         $display("入侧 fire %0d 出侧收 %0d —— 反压丢数检查：%s",
                  snd_cnt, rcv_cnt, (err_cnt == 0) ? "一致" : "不一致[ERR]");
+`ifdef HARD
+        $display("[DONE] 硬切实验完成（本模式不做 golden 比对；看上方 HARD-SOF 序列）");
+`else
         if (err_cnt == 0)
             $display("[PASS] sharpen：期望比对全等（0 误差）+ bypass 一致 + 反压稳定");
         else
             $display("[FAIL] err=%0d", err_cnt);
+`endif
         $finish;
     end
 
