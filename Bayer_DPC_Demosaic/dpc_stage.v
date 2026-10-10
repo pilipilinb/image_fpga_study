@@ -11,11 +11,18 @@
 //      驱动一个与 blc_core 同构的中心坐标计数器（out_sof 清零 / out_eol 行进列清），
 //      任意反压/气泡下与窗口严格同拍。BLC 的 out_phase 在 TB 里做交叉校验用。
 //
-// 【反压结构（核 LAT=1 寄存器直接当输出寄存器用，零额外寄存器）】
-//   lb.out_ready = !ostall；核 valid_in = lb.out_valid（不门控 ostall）。
-//   ostall 时 lb 冻结 → 窗口/相位不变 → 核每拍重算同一窗口 → 输出寄存器每拍
-//   重写同一值 → 输出天然稳定（简流稳定性）。ostall 解除后 lb 推进到下一窗口。
-//   核输入拍 = lb.out_valid && lb.out_ready，相位计数器在该拍推进。
+// 【★ M5.3 时序修复：为什么在"行缓存→核"之间插一级窗口寄存器】
+//   本模块是 M3 交付的，早于"M5.1 时序预检铁律"。整链 OOC 综合（isp_chain_top @150MHz）
+//   实测：唯一违例路径就是本级的 **行缓存 pad mux（sel_row/sel_col + 9:1 mux，组合）
+//   → 核内极值树/比较 → dout_reg**，26 级 / WNS −0.939ns（10 个失败端点全在 dout_reg）。
+//   修法=M5.1 同款：在 pad mux 之后、核之前插一级 **窗口寄存器** win_q（不改共用的
+//   line_buffer_fifo_nxn，保护 M1/M3 占用不变式），把那一整条长组合路径切成两拍
+//   ⇒ 处理路径延迟 LAT = 窗口寄存器(1) + 核(1) = 2。sof/eol/相位对齐链同步改为 2 拍。
+//
+// 【反压结构】ostall = dpc_valid && !out_ready → lb_ready = !ostall，win_q/ph_q/wv_q
+//   同步冻结 + 核 hold_in=ostall（输出寄存器保持）→ 输出稳定（简流稳定性）。
+//   ostall 时窗口/相位不变 → 核每拍重算同一窗口、寄存器每拍重写同值；解除后推进。
+//   核输入拍 = lb.out_valid && lb.out.ready（fire_w），相位计数器在该拍推进。
 // ============================================================================
 `timescale 1ns/1ps
 
@@ -100,7 +107,27 @@ module dpc_stage #(
         ph_win = lb_sof ? 2'b00 : {row_cnt[0], col_cnt[0]};   // sof 拍强制 00（抹跨帧残留）
     end
 
-    // ---- DPC 核（LAT=1 寄存器即 stage 输出寄存器；ostall 时输入不变→输出稳定）----
+    // ---- ★ 步 1：窗口寄存器（切在 pad mux 之后、核之前）----
+    //   lb_ready = !ostall ⇒ ostall 时行缓存输出本身冻结，此处同步冻结即保持对齐。
+    localparam LAT_WIN  = 1;
+    localparam LAT_CORE = 1;                 // = dpc_envelope_dw 的流水级数
+    localparam LAT      = LAT_WIN + LAT_CORE;  // = 2，sof/eol/相位对齐链深度
+    reg [N*N*DW-1:0] win_q;
+    reg [1:0]        ph_q;
+    reg              wv_q;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            win_q <= {(N*N*DW){1'b0}};
+            ph_q  <= 2'b00;
+            wv_q  <= 1'b0;
+        end else if (!ostall) begin
+            win_q <= lb_win;
+            ph_q  <= ph_win;
+            wv_q  <= lb_valid;
+        end
+    end
+
+    // ---- DPC 核（LAT=1；hold_in=ostall 时输出寄存器保持）----
     wire [DW-1:0] dpc_dout;
     wire          dpc_valid;
 
@@ -108,28 +135,32 @@ module dpc_stage #(
         .DW(DW), .THR(THR)
     ) u_dpc (
         .clk(clk), .rst_n(rst_n),
-        .win_flat(lb_win),
-        .phase(ph_win),
-        .valid_in(lb_valid),
+        .win_flat(win_q),
+        .phase(ph_q),
+        .valid_in(wv_q),
         .hold_in(ostall),              // ostall 期间核输出寄存器保持（防覆盖丢数）
         .dout(dpc_dout),
         .valid_out(dpc_valid)
     );
     assign ostall = dpc_valid && !out_ready;
 
-    // ---- sof/eol/phase 与核输出对齐（核在 fire_w 的下一拍出数 → 同拍锁存）----
-    reg        sof_r, eol_r;
+    // ---- sof/eol/phase 与核输出对齐（窗口寄存器 1 + 核 1 = 2 拍）----
+    //   ★ 深度必须 = LAT_WIN + LAT_CORE；漏一级/多一级都会让 sof/eol 与数据错位。
+    reg        sof_c0, sof_r;
+    reg        eol_c0, eol_r;
     reg [1:0]  ph_r;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            sof_r <= 1'b0;
-            eol_r <= 1'b0;
-            ph_r  <= 2'b00;
+            sof_c0 <= 1'b0; sof_r <= 1'b0;
+            eol_c0 <= 1'b0; eol_r <= 1'b0;
+            ph_r   <= 2'b00;
         end
         else if (!ostall) begin
-            sof_r <= lb_sof;      // fire_w 拍锁存 → 与 dpc_dout（下一拍）同拍
-            eol_r <= lb_eol;
-            ph_r  <= ph_win;
+            sof_c0 <= lb_sof;
+            sof_r  <= sof_c0;
+            eol_c0 <= lb_eol;
+            eol_r  <= eol_c0;
+            ph_r   <= ph_q;            // ph_q 是"核正在处理的那个窗口"的相位 → 再打 1 拍与 dout 同拍
         end
         // ostall：保持（与 dpc_dout 的"重写同值"一致）
     end

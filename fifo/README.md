@@ -97,6 +97,18 @@ A 满速背靠背 500 字（8×6 帧语义流，tuser=帧首/tlast=行末全程�
 2. **源载入上限基准用错计数器**：源模型有两个计数——`ngen`（已载入）与 `snd_cnt`（已被 fire），写满/反压场景下二者不相等（字会停在 valid 上等 ready）。设"发 N 字"的目标必须以 `ngen` 为基准，否则源停摆。
 3. **DUT 例化忘了写**：s_tready 悬空为 Z，`tvalid && tready` 永假、snd_cnt 恒 0——TB 骨架先写激励后补 DUT 时的高发错误。
 
+## 踩坑记录 3：叶子模块漏写 include 守卫 → 多条 include 链重复引入就报 "already declared"（2026-10-10，M5.3）
+
+**现象**：整链 `FpgaIspChain/isp_chain_top.v` 编译报 `Module axis_stream_fifo was already declared`。
+
+**根因**：`axis_stream_fifo.v` 原先**没有 `` `ifndef `` 守卫**。之前每条链只从**一条**路径引入它（`blc_axis_adapter` **或** `denoise_stage` **或** `sharpen_stage` **或** `axis_out_adapter`），无意中没事；
+整链顶层**同时**例化这四个模块 ⇒ 同一文件被 include **四次** ⇒ 模块重复声明。
+
+**修法**：给 `axis_stream_fifo.v` 补守卫 `` `ifndef AXIS_STREAM_FIFO_V_INC / `define ... / `endif ``（同 `async_fifo.v` 的 `ASYNC_FIFO_V_INC`）。
+按项目惯例，**补守卫前先 grep 确认没有别处用"`` `define 同名宏 + `` `include ``"的旧写法**（那写法会把整个文件内容屏蔽，本项目踩过）。
+
+**教训**：**共用的叶子模块一律自带 include 守卫**——别依赖"现在看起来只被引一次"（`async_fifo.v` 早已有守卫，`axis_stream_fifo.v` 这次补齐）。
+
 ## 单时钟用法（同频同相，async_fifo）
 
 见 `fifo接口说明`：`wr_clk`/`rd_clk` 接同一个 clk 即可。注意 **`.rst(!rst_n)` 极性要反转**（本模块高有效，工程习惯低有效）；格雷码/双域同步机制在同频下照常工作，只是多余但无害。

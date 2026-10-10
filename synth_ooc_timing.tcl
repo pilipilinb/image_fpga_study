@@ -34,7 +34,11 @@ set lb_dir   [file join $root line_buffer line_buffer_fifo_nxn]
 set incs [list $root $fifo_dir $lb_dir \
                [file join $root Sharpen] \
                [file join $root BilateralFilter] \
-               [file join $root CCM]]
+               [file join $root CCM] \
+               [file join $root Gamma] \
+               [file join $root BLC] \
+               [file join $root Bayer_DPC_Demosaic] \
+               [file join $root AxisOut]]
 
 # 显式列文件，避免 glob 把 tb_*.v（含 $dumpfile/$readmemh）读进综合
 set srcs [list \
@@ -44,6 +48,18 @@ set srcs [list \
     [file join $root BilateralFilter denoise_stage.v] \
     [file join $root CCM ccm_core.v] \
     [file join $root CCM ccm_stage.v] \
+    [file join $root Gamma gamma_core.v] \
+    [file join $root Gamma gamma_stage.v] \
+    [file join $root BLC blc_core.v] \
+    [file join $root BLC blc_axis_adapter.v] \
+    [file join $root Bayer_DPC_Demosaic dpc_envelope_dw.v] \
+    [file join $root Bayer_DPC_Demosaic dpc_stage.v] \
+    [file join $root Bayer_DPC_Demosaic demosaic_bilinear_dw.v] \
+    [file join $root Bayer_DPC_Demosaic demosaic_mhc_dw.v] \
+    [file join $root Bayer_DPC_Demosaic demosaic_stage.v] \
+    [file join $root AxisOut axis_out_adapter.v] \
+    [file join $root FpgaIspChain awb_stub.v] \
+    [file join $root FpgaIspChain isp_chain_top.v] \
     [file join $fifo_dir axis_stream_fifo.v] \
     [file join $fifo_dir async_fifo.v] \
     [file join $lb_dir line_buffer_fifo_nxn.v] \
@@ -57,13 +73,15 @@ foreach f $srcs {
 }
 
 set tops [list \
-    [list sharpen_stage [file join $root Sharpen]] \
-    [list denoise_stage [file join $root BilateralFilter]] \
-    [list ccm_stage     [file join $root CCM]] ]
+    [list sharpen_stage [file join $root Sharpen] clk] \
+    [list denoise_stage [file join $root BilateralFilter] clk] \
+    [list ccm_stage     [file join $root CCM] clk] \
+    [list isp_chain_top [file join $root FpgaIspChain] aclk] ]
 
 foreach item $tops {
     set top [lindex $item 0]
     set wd  [lindex $item 1]
+    set clkport [lindex $item 2]
 
     puts "===== SYNTH OOC: $top   (cwd=$wd) ====="
     cd $wd
@@ -71,7 +89,7 @@ foreach item $tops {
                  -include_dirs $incs -directive default
 
     # 关键路径的"级数"是判断要不要拆流水的核心指标
-    create_clock -name clk -period $tclk [get_ports clk]
+    create_clock -name clk -period $tclk [get_ports $clkport]
 
     set tp  [get_timing_paths -max_paths 1 -delay_type max]
     set wns "n/a"

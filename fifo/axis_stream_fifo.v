@@ -38,6 +38,9 @@
 // ============================================================================
 `timescale 1ns/1ps
 
+`ifndef AXIS_STREAM_FIFO_V_INC
+`define AXIS_STREAM_FIFO_V_INC
+
 module axis_stream_fifo #(
     parameter DW       = 8,          // 数据位宽
     parameter DEPTH    = 512,        // 深度（必须 2 的幂）
@@ -183,3 +186,5 @@ module axis_stream_fifo #(
     endgenerate
 
 endmodule
+
+`endif  // AXIS_STREAM_FIFO_V_INC

@@ -35,6 +35,7 @@
   - [AXISOUT · 出端 AXIS 适配（M5.1，简流 RGB888 → VDMA S2MM）](#axisout--出端-axis-适配m51简流-rgb888--vdma-s2mm)
   - [DENOISE_CCM_GAMMA · RGB 三段链 + ★ 顺序可交换性实验（M5.2）](#denoise_ccm_gamma--rgb-三段链--顺序可交换性实验m52)
   - [BLC_DPC · BLC/DPC 顺序可交换性实验（★ 预测被证伪后定位真因）](#blc_dpc--blcdpc-顺序可交换性实验-预测被证伪后定位真因)
+  - [FPGAISPCHAIN · 八级 ISP 整链（M5.3，AXIS RAW10 进 → AXIS RGB888 出）](#isp_chain--八级-isp-整链m53axis-raw10-进--axis-rgb888-出)
 - [目录结构](#目录结构)
 - [快速开始](#快速开始)
 - [验证工具链](#验证工具链)
@@ -60,6 +61,7 @@
 | **出端 AXIS 适配（M5.1）** | 链路出口 / 基础设施 | 简流(RGB888)→AXIS(tdata/tkeep=111/tuser/tlast)+弹性 FIFO；S2MM 契约逐条核对（fire 3072=收 3072、帧 16、行 192） |
 | **RGB 三段链 + 顺序实验（M5.2）** | 降噪→CCM→Gamma 串联（30bit→RGB888） | `rgb_chain_top.v` + `SWAP_DC` 单参数切顺序；**不可交换**（98.2% 像素位级不同）、**降噪在前优 1.51 dB**（28.67 vs 27.16 dB、SSIM 0.9323 vs 0.9147）、色差噪声 17.81 vs 26.32、CCM 饱和 75 vs 381（5.1×）；两顺序 TB 全 PASS + 独立复算 0 误差 |
 | **BLC/DPC 顺序实验** | BLC↔DPC 串联（RAW10 含 OB） | `blc_dpc_top.v` + `SWAP_BD` 单参数切顺序；**结论分相位**：R/B 中心不下溢即**位级可交换**（差异仅 3/25），**G 中心天然不可交换**（DPC 把 Gr/Gb 当同色邻居，而 `OB[Gr]=64 ≠ OB[Gb]=180` 差 **116 LSB**）；质量几乎等价（0.22% 像素、0.38 dB）⇒ 顺序由**契约/量纲**决定；★ 方法论亮点 = **预测被实测证伪两次后打印相位分布定位真因** |
+| **八级 ISP 整链（M5.3）** | 8 级串联（AXIS RAW10 进 → AXIS RGB888 出） | `isp_chain_top.v` = BLC→DPC→**AWB(1 拍 1.0 占位)**→Demosaic→降噪→CCM→Gamma→锐化 + 两端 AXIS 适配；逐级位级 **0 误差**（真图 4 帧 46144/46144 + 逐级独立复算）；端到端 PSNR 26.77dB（全关 22.05）；**OOC 时序 −0.939ns/26 级 → +1.589ns/17 级**（违例根因=M3 遗留的 DPC 内部路径，修法=窗口寄存器）；**级间 0 FIFO**（先量后加：入口造行 stall ≈6·W，Demosaic 后各级 stall 恒 0） |
 | **行缓存（LINE_BUFFER）** | 邻域运算地基 | N×N 窗口生成器，卷积/缩放/滤波的复用底座；含 FIFO 版（支持反压 + 可换 IP） |
 | **色彩空间转换（CSC）** | 逐像素点运算 | RGB → YCbCr（BT.601），1 对 1 映射，不需要行缓存 |
 | **双线性插值缩放（bilinear）** | 邻域运算 | 任意整数倍缩放（放大 N 倍 / 缩小 N 倍）；v3 整图 ROM 版 + v4 行缓存版（大图/实时视频） |
@@ -238,7 +240,7 @@ CSI-2 RX ─AXIS─► [AXIS 适配 + 入端弹性 FIFO]
 | **M4** ✅ | 降噪 ✅（双边，M4-1）→ CCM ✅（M4-2）→ Gamma ✅（M4-3）—— 线性 RGB 域三模块全部完成（AWB 位 1.0 直通占位） | ✅ M4 完成 |
 | **M5.1** ✅ | **锐化（USM，感知域 RGB888）+ 出端 AXIS 适配（S2MM 契约）**——三模式 TB 全 PASS + 锐度量化 + 契约逐条核对 | ✅ 2026-10-09 |
 | **M5.2** ✅ | **RGB 三段链（降噪→CCM→Gamma，30bit→RGB888）+ ★ 顺序可交换性实验**——`SWAP_DC` 单参数；两顺序不可交换（98.2% 像素不同）、降噪在前优 **1.51 dB** | ✅ 2026-10-10 |
-| **M5.3** | 8 级整链串联（AXIS(RAW10) 进 → RGB888 出，全链 PSNR + 逐级插桩比对） | ⬜ |
+| **M5.3** ✅ | **八级整链串联**（AXIS(RAW10) 进 → AXIS(RGB888) 出，含 AWB 1 拍占位）——逐级位级 0 误差 + 端到端 PSNR + 逐级插桩；**OOC 时序 −0.939→+1.589ns**（修 M3 遗留 DPC 内部路径）；量 stall 后**级间 0 FIFO** | ✅ 2026-10-10 |
 | **M6** | AWB 统计 + Bayer 域增益应用（插 DPC→Demosaic 之间）+ MicroBlaze 闭环——涉及软核交互放链路最后 | ⬜ |
 
 ---
@@ -776,6 +778,34 @@ ISP 链**最后一级**（M5.1）。输入 = M4-3 Gamma 出的 **RGB888 24bit �
 
 ---
 
+### ISP_CHAIN · 八级 ISP 整链（M5.3，AXIS RAW10 进 → AXIS RGB888 出）
+
+把前面 5 个阶段串成**一条完整流水**：`AXIS(RAW10) →[入端适配]→ BLC → DPC → AWB(1 拍 1.0 占位) → Demosaic → 降噪 → CCM → Gamma → 锐化 →[出端适配]→ AXIS(RGB888, tkeep=111)`。
+AWB 放的**1 拍 1.0 增益占位**不是"空着"——它把**位置/延迟/端口**按最终形态定死（顶层已预留 `awb_gain_00..11` 与 `awb_stat_00..11`），
+M6 接真 AWB 时**顶层与下游零改动**、端到端 golden 不用重算。
+目录见 [FpgaIspChain/](FpgaIspChain/README.md)，设计推导见 [八级ISP整链设计与验证.md](FpgaIspChain/八级ISP整链设计与验证.md)，面试叙事版见 [面试故事集.md](面试故事集.md) 故事 5。
+
+**验证（全 [PASS]）**：协议 TB（16×12×6 帧，A 满速 / B 汇随机 50% / C 汇长拉低）`1152/1152`、真图（112×103 连发 4 帧）`46144/46144`，
+位级 0 误差 + `tkeep≡111`/`tuser`/`tlast` 契约全对 + 反压稳定零违例；`verify_isp_chain.py` **逐级**独立复算全 0 误差。
+
+**逐级插桩 PSNR（每级 vs 理想输入同级输出）**：BLC 24.54 → **DPC 26.16**（修坏点 +1.6）→ AWB 26.16（恒等）→ Demosaic 28.39 → **降噪 31.16（峰值 +2.8）** → CCM 27.16 → Gamma 27.59 → 锐化 26.77。
+
+**端到端 PSNR（RGB888 vs 理想靶子）**：DPC/降噪全关 **22.05** → 仅降噪关 23.00 → **整链 26.77 dB**。
+
+**★ 时序（整链 OOC @150MHz，顶层 `isp_chain_top`）**：集成初版 **−0.939ns / 26 级 ❌** → 修后 **+1.589ns / 17 级 ✅**。
+违例根因**不是"反压跨 8 级"**（那族 MET +1.9ns），而是 **M3 遗留的 DPC 级内部路径**——行缓存 pad mux（组合）与核内极值树挤在同一拍
+（M3 早于 M5.1 的"时序预检铁律"）。修法 = M5.1 同款**窗口寄存器**（`dpc_stage` 延迟 1→2，对齐链同步改 2 拍），
+并回归 M3 链 TB（3 模式）+ BLC_DPC 实验 TB（4 变体）全 PASS。
+
+**★ stall 测量 → "级间先不加 FIFO"的数据依据**：外零反压时**只有入口 stall**（来自"帧末造行期"，4 个含行缓存级的造行期在帧边界**级联**，
+最长 ≈ **6·W** 拍：W=112 → 684），**Demosaic 之后各级 stall 恒 0** ⇒ 级间无需 FIFO；
+**入端弹性 FIFO 深度 ≥ ~6·W**（W=640 → 4096），出端 FIFO 平滑"VDMA 忙"突发。
+
+> **方法论**：① "功能 0 误差 ≠ 时序能过"在整链集成时**再次应验**，且违例点**不在预想的地方** ⇒ **必须按最终顶层跑 OOC**、并**看关键路径的归属（Source/Destination）**；
+> ② "先量后加"——先用纯组合 ready 把链跑通、量出真实 stall，再按数据决定加不加/加哪儿（别凭感觉堆 FIFO）。
+
+---
+
 ## 目录结构
 
 ```
@@ -885,6 +915,12 @@ image_fpga_study/
 │   ├── make_blc_dpc_data.py / verify_blc_dpc.py
 │   ├── blc_dpc_compare.png
 │   ├── BLC_DPC实现计划.md / README.md
+├── FpgaIspChain/              # M5.3 八级 ISP 整链（AXIS RAW10 进 → AXIS RGB888 出；AWB 1 拍占位；级间 0 FIFO）
+│   ├── isp_chain_top.v / awb_stub.v
+│   ├── tb_isp_chain.v
+│   ├── make_chain_data.py / verify_isp_chain.py
+│   ├── isp_chain_compare.png
+│   ├── 八级ISP整链设计与验证.md / README.md
 └── README.md                  # 本文档
 ```
 
@@ -1041,6 +1077,10 @@ python verify_axis_out.py                                  # 独立解析真实 
 - **未定宽常量会把整条表达式抬到 32 位**（M5.1）：`2*(...)`、`4*p4`、`x + (1<<7)`、`res > 255` 里的字面常量都是 **32bit**，按 Verilog 上下文位宽规则会把整个表达式撑到 32 位 ⇒ 宽加法器 / 宽比较器，逻辑级数和布线一起变差。**修法**：先算进**定宽中间量**（`reg [11:0]`），乘 2/4 用**移位**，round 常量做 `localparam [W-1:0] RND`，饱和比较改成"高位是否非零"（`|res[hi:DW]`）
 - **`edge` 是 Verilog 保留字**（M5.1）：函数里把局部变量命名成 `edge`（`posedge`/`negedge` 的词根）会被 iverilog 直接报 `syntax error`——这类"看起来很像普通单词"的保留字要留意
 - **DSP48 会偷偷把周边逻辑吸进自己的组合 ALU**（M5.1 实测）：`denoise_stage` 的 34 级里有 **17 级落在 `DSP_ALU=9` + `DSP_OUTPUT=8`**——综合器把乘法的 round/饱和整段塞进了 DSP 的组合旁路。**修法**：在乘法输出**显式加一级寄存器**（RTL 里写 `prod_q <= a*b;`），阻止被吸收；或用 DSP 内部流水寄存器
+- **"功能 0 误差 ≠ 时序能过"在整链集成时再次应验，且违例点不在预想的地方**（M5.3）：整链 TB 两模式一次全过（逐级位级 0 误差），但整链 OOC **WNS −0.939ns**。原以为瓶颈是"反压 `out_ready→in_ready` 跨 8 级"，实测那族路径 **MET +1.9ns**；真正的 10 个失败端点**全在 `u_dpc/u_dpc/dout_reg[*]`**——**M3 遗留的 DPC 级内部**（行缓存 pad mux 组合逻辑 + 核内极值树挤在同一拍，M3 早于 M5.1 的时序铁律）。**教训**：① **必须按最终顶层跑 OOC**（只看单模块会漏）；② 看关键路径的 **Source/Destination 归属**才知道改哪一级；③ 改一个被多处复用的级，**回归面 = 它的所有上下游使用者**（本次回归 M3 链 3 模式 + BLC_DPC 4 变体）
+- **`axis_stream_fifo.v` 原先没有 include 守卫 → 一个模块被多条 include 链重复引入就报 "Module already declared"**（M5.3）：之前每条链只从**一条**路径引入它（无意中没事）；整链顶层同时经 `blc_axis_adapter`/`denoise_stage`/`sharpen_stage`/`axis_out_adapter` **四条**路径引入 ⇒ 重复声明。**修法**：给该文件补 `\`ifndef AXIS_STREAM_FIFO_V_INC` 守卫（按惯例先 grep 确认无"`\`define 同名宏 + include`"旧写法）。**规律**：**共用的叶子模块一律要自带 include 守卫**，别依赖"看起来只被引一次"
+- **量 stall 必须多帧连续，单帧量不到**（M5.3 方法坑）：真图单帧时，行缓存的"帧末造行期"只发生在**输入已全部收完**之后，源已无数据 ⇒ 入口 `tvalid=0` ⇒ 测出的 stall 全 0（假象）。**修法**：让源模型循环发同一帧、**连发多帧**，使"上一帧造行期"与"下一帧数据"重叠，才量得到真实反压（实测入口最长 684 拍，≈ 4 个含行缓存级造行期级联之和 ≈ 6·W）
+- **多帧 stall 测量的 TB 要显式处理"逐级落盘 = 多帧"**：IMG 模式从单帧改连发 4 帧后，逐级插桩文件与末端文件都含 4 帧，独立校验脚本要**只取第 1 帧**（`[:W*H]`）比对，否则长度断言先炸
 
 ---
 
