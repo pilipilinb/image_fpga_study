@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>双 BRAM Ping-Pong 架构：为什么直方图均衡要"两块表轮流用"</title>
+  <style>
+    body {
+      font-family: "Microsoft YaHei", "PingFang SC", SimHei, sans-serif;
+      margin: 0; padding: 24px; background: #f5f7fa; color: #333;
+    }
+    .page { max-width: 1000px; margin: 0 auto; background: #fff; border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08); padding: 28px 36px 40px; }
+    h1 { font-size: 22px; color: #1f4e79; margin: 0 0 6px; }
+    .subtitle { font-size: 13px; color: #666; margin: 0 0 24px; }
+    h2 { font-size: 17px; color: #1f4e79; border-left: 4px solid #4a82c3; padding-left: 10px; margin: 32px 0 14px; }
+    h3 { font-size: 14px; color: #333; margin: 18px 0 8px; }
+
+    /* 类比卡片 */
+    .cards { display: flex; gap: 16px; flex-wrap: wrap; margin: 12px 0; }
+    .card { flex: 1; min-width: 280px; border-radius: 10px; padding: 14px 16px; border: 2px solid; font-size: 13px; }
+    .card h4 { margin: 0 0 8px; font-size: 14px; }
+    .card p { margin: 6px 0; line-height: 1.8; }
+    .life { background: #fdf3ee; border-color: #d9822b; }
+    .life h4 { color: #a34b1f; }
+    .hw   { background: #eefaf0; border-color: #2e8b57; }
+    .hw h4   { color: #1a6b3c; }
+
+    /* 代码块 */
+    .code { background: #f8f9fb; border: 1px solid #dde3ea; border-radius: 8px; padding: 12px 16px;
+            margin: 10px 0; font-size: 12.5px; line-height: 1.7; overflow-x: auto; }
+    .code .cmt { color: #6a9955; }
+    .code pre { margin: 0; font-family: Consolas, "Courier New", monospace; white-space: pre; }
+    .hl { color: #c0341d; font-weight: bold; }
+
+    /* 表格 */
+    table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 10px 0; }
+    th, td { border: 1px solid #dde3ea; padding: 8px 12px; text-align: center; }
+    th { background: #eef4fb; color: #1f4e79; }
+    tr:nth-child(even) td { background: #fafbfd; }
+    .good { color: #1a6b3c; font-weight: bold; }
+    .bad  { color: #c0341d; font-weight: bold; }
+
+    code { background: #f0f2f5; padding: 1px 6px; border-radius: 4px; font-size: 12px; color: #c0341d; }
+    ul { font-size: 13px; line-height: 2; padding-left: 22px; }
+
+    /* 阶段图（无 SVG，用色块） */
+    .phase { text-align: center; font-size: 14px; color: #1f4e79; background: #eef4fb;
+             border-radius: 8px; padding: 10px; margin: 14px 0; line-height: 2; }
+    .ram-box { display: inline-block; border: 2px solid #4a82c3; border-radius: 8px;
+               padding: 6px 14px; margin: 4px; font-weight: bold; background: #fff; }
+    .ram-box small { display: block; font-weight: normal; color: #666; font-size: 11px; }
+
+    .tip { background: #fffbe8; border: 1px solid #e8d48a; border-radius: 8px; padding: 10px 14px;
+           margin: 10px 0; font-size: 13px; line-height: 1.9; }
+    .tip b { color: #a34b1f; }
+    .quiz { background: #f3f7fd; border: 1px solid #bcd2e8; border-radius: 8px; padding: 12px 16px;
+            margin: 10px 0; font-size: 13px; line-height: 2; }
+  </style>
+</head>
+<body>
+  <div class="page">
+
+    <h1>双 BRAM Ping-Pong 架构</h1>
+    <p class="subtitle">
+      为什么直方图均衡要"两块表轮流用" · 核心就 3 行代码怎么读懂 · 一帧的完整循环 ·
+      和 DDR 帧存双缓冲是同一个思想（配套工程：histogram_tutorial/histeq_core.v）
+    </p>
+
+    <!-- ================= 1. 问题 ================= -->
+    <h2>1. 先想清楚：这种算法需要"两张表"</h2>
+    <p style="font-size:13px;line-height:2">
+      直方图均衡每一帧要做两件先后接替的事：
+    </p>
+    <table>
+      <tr><th>表</th><th>干什么</th><th>什么时候可用</th></tr>
+      <tr><td><b>统计表 h</b></td><td>数"每个灰度值出现了几次"，边收像素边 +1</td><td>整帧收完才能用</td></tr>
+      <tr><td><b>映射表 CDF</b></td><td>像素来了查表，把灰度映射成均衡后的值</td><td>统计表改造完后才能用</td></tr>
+    </table>
+    <p style="font-size:13px;line-height:2">
+      问题来了：<b>统计表在"被写"的时候，映射表在"被读"——两件事同时发生，一张表做不到</b>。
+      因为统计期间表在不停地改（每拍 +1），这时候拿它去查映射，查到的永远是半成品；
+      而且两件事之间还有一段"空白期"要把统计表改造成映射表（CDF 前缀和，用 257 拍），
+      改造期间这张表既不能统计也不能映射。
+    </p>
+    <div class="tip">
+      <b>结论</b>：既然一张表忙不过来（写了就不能读、改造了就不能用），
+      就准备<b>两块一模一样的表</b>，轮流干：A 统计时 B 映射，下一帧 B 统计、A 映射——这就是 ping-pong。
+    </div>
+
+    <!-- ================= 2. 类比 ================= -->
+    <h2>2. 大白话类比：两个前台窗口</h2>
+    <div class="cards">
+      <div class="card life">
+        <h4>生活版：银行两个窗口</h4>
+        <p>窗口 A 在给今天的第一批客户办业务（统计），窗口 B 在给昨天的客户查档案（映射）。
+        下班后 A 把今天的记录整理成册（CDF），B 把昨天的档案清空归档（清零）。
+        第二天两人换班——B 办业务、A 查档案。谁也不会一边办业务一边查档案。</p>
+      </div>
+      <div class="card hw">
+        <h4>硬件版：双缓冲（Double Buffering）</h4>
+        <p>写缓冲区和读缓冲区各一份，写满一份后"交换指针"继续写另一份。
+        读者永远只读"写完了的"那一份，不会看到写到一半的数据——这就是为什么视频里
+        DDR 帧存要 ping-pong、显示器要双缓冲，防止画面撕裂。</p>
+      </div>
+    </div>
+    <p style="font-size:13px;line-height:2">
+      关键词是<b>"角色互换"</b>：不是把数据搬来搬去，而是<b>一块表在"统计态"和"映射态"之间
+      来回切换身份</b>，切换的时机是帧边界。
+    </p>
+
+    <!-- ================= 3. 核心代码 ================= -->
+    <h2>3. 工程里的核心代码：怎么实现"轮流"</h2>
+    <p style="font-size:13px;line-height:2">
+      整个 ping-pong 的调度逻辑浓缩成 <b>3 行代码</b>，其余全是外围的数据通路。逐行看：
+    </p>
+
+    <h3>3.1 帧计数器 frame_cnt —— "轮"到谁了</h3>
+    <div class="code"><pre>
+<span class="cmt">// 已经统计完的帧数：帧 0 结束时 =1，帧 1 结束时 =2……</span>
+reg [1:0] frame_cnt;
+...
+<span class="cmt">// 每一帧干完（frame_done 拉高）就 +1</span>
+if (frame_done) frame_cnt &lt;= frame_cnt + 1'b1;</pre></div>
+    <p style="font-size:13px;line-height:2">
+      <b>frame_cnt 的最低一位（bit0）每帧翻转一次：0 → 1 → 0 → 1……</b>
+      这就是"轮到谁"的天然信号，拿它选表，连计数器都不用额外写。
+    </p>
+
+    <h3>3.2 stat_is_ram1 —— 本帧统计用哪块表（核心第 1 行）</h3>
+    <div class="code"><pre>
+<span class="cmt">// ★ 本帧的"统计表"是不是 ram1？（1=是，0=不是，那就是 ram0）</span>
+wire <span class="hl">stat_is_ram1 = frame_cnt[0];</span></pre></div>
+    <table>
+      <tr><th>frame_cnt</th><th>最低位</th><th>统计表</th><th>映射表</th><th>正在发生</th></tr>
+      <tr><td>0（帧 0）</td><td>0</td><td>ram0</td><td>ram1（用不上）</td><td>帧 0 只统计，无输出</td></tr>
+      <tr><td>1（帧 1）</td><td>1</td><td>ram1</td><td>ram0</td><td>帧 1 统计 ram1、用帧 0 的 CDF 映射</td></tr>
+      <tr><td>2（帧 2）</td><td>0</td><td>ram0</td><td>ram1</td><td>又换回来，循环</td></tr>
+    </table>
+    <p style="font-size:13px;line-height:2">
+      逻辑就是这么简单：<b>统计表 = 帧号的奇偶</b>，另一块自动是映射表。
+      帧 0/2/4 统计 ram0，帧 1/3/5 统计 ram1。
+    </p>
+
+    <h3>3.3 cdf_sel —— 空白期"按刚结束的帧"回退一帧（核心第 2 行）</h3>
+    <div class="code"><pre>
+<span class="cmt">// ★ 帧间空白期（CDF/CLEAR）该操作哪块表？= frame_cnt 最低位取反</span>
+wire <span class="hl">cdf_sel = frame_cnt[0] ^ 1'b1;</span></pre></div>
+    <p style="font-size:13px;line-height:2">
+      这一行最容易被问倒，它是个 <b>off-by-one（差一错误）的修复</b>。原因：
+    </p>
+    <ul>
+      <li>frame_cnt 在"帧结束那一拍"就立刻 <b>+1</b> 了（翻成下一帧的编号）；</li>
+      <li>但空白期要处理的还是<b>刚结束那一帧</b>的表——给"帧 0 的统计表"做 CDF、给"帧 0 的映射表"清零；</li>
+      <li>所以角色必须<b>按上一帧算</b>，最低位取反（^1）就是回退一帧。</li>
+    </ul>
+    <table>
+      <tr><th>时刻</th><th>frame_cnt</th><th>stat_is_ram1（会选错）</th><th>cdf_sel（正确）</th><th>操作</th></tr>
+      <tr><td>帧 0 刚结束</td><td>1</td><td>1 → 给 ram1 做 CDF ✗</td><td>0 → 给 ram0 做 CDF ✓</td><td>CDF 转换帧 0 的统计表 ram0</td></tr>
+      <tr><td>帧 1 刚结束</td><td>2</td><td>0 → 给 ram0 做 CDF ✗</td><td>1 → 给 ram1 做 CDF ✓</td><td>CDF 转换帧 1 的统计表 ram1</td></tr>
+    </table>
+    <div class="tip">
+      <b>实测坑</b>：初版直接用了 stat_is_ram1，结果帧 0 结束后把"刚统计好的真表"清零了、
+      把"上电垃圾表"做成了 CDF——帧 1 输出全 0。这就是"角色切换时机必须和谁在用这张表对齐"。
+    </div>
+
+    <h3>3.4 两块表怎么声明和连接（核心第 3 行附近）</h3>
+    <div class="code"><pre>
+<span class="cmt">// 两块一模一样的 BRAM：ram0 / ram1，各 256 格（地址 0~255 = 灰度值）</span>
+reg [13:0] ram0 [0:255];
+reg [13:0] ram1 [0:255];
+<span class="cmt">// 每块都有独立写口（wena/waddr/wdata）和读口（raddr/rdata）——简单双口</span>
+<span class="cmt">// 统计需要同一拍"读当前像素的格 + 写回上一像素的格"，两个地址，单端口做不到</span></pre></div>
+    <p style="font-size:13px;line-height:2">
+      "双口"和"双块"是两个独立的概念，别混：
+    </p>
+    <ul>
+      <li><b>双口</b>：一块 RAM 内部有读写两个端口（地址独立），解决"同一拍读写两个不同地址"；</li>
+      <li><b>双块（ping-pong）</b>：两块 RAM 轮流当不同角色，解决"写中的表不能读、改造中的表不能用"。</li>
+    </ul>
+
+    <!-- ================= 4. 一帧循环 ================= -->
+    <h2>4. 一帧的完整循环：A/B 分别在干嘛</h2>
+    <div class="phase">
+      以"帧 N+1"为例（帧 N 结束后：A 是 CDF 表、B 是清完 0 的空表）：
+    </div>
+    <table>
+      <tr><th>阶段</th><th>耗时</th><th>ram0（A）</th><th>ram1（B）</th></tr>
+      <tr><td>帧 N+1 有效像素</td><td>11536 拍</td><td class="good">映射：每拍读 CDF[y] → 输出 J</td><td class="good">统计：每拍给 y_d1 的计数 +1</td></tr>
+      <tr><td>帧末 DRAIN</td><td>2 拍</td><td>保持（等最后像素吐完）</td><td>保持</td></tr>
+      <tr><td>空白期 CDF</td><td>257 拍</td><td>闲置</td><td class="good">从"计数表"改造成"CDF 表"</td></tr>
+      <tr><td>空白期 CLEAR</td><td>256 拍</td><td class="good">全部格子写 0（下下帧当统计表）</td><td>闲置</td></tr>
+      <tr><td>WAIT</td><td>等像素</td><td colspan="2">下一帧到来，角色互换（A 统计、B 映射）</td></tr>
+    </table>
+    <p style="font-size:13px;line-height:2">
+      注意两条规律：
+    </p>
+    <ul>
+      <li><b>当前帧统计表</b>：读写双口最忙（读当前像素的计数 / 写上一像素的计数 +1）；</li>
+      <li><b>当前帧映射表</b>：只读不写——映射期写口整帧闲置，映射表是"成品"，不许改。</li>
+    </ul>
+
+    <!-- ================= 5. 三个易错点 ================= -->
+    <h2>5. 三个最容易被面试官问倒的点</h2>
+    <table>
+      <tr><th>问题</th><th>答案（一句话）</th><th>对应修复</th></tr>
+      <tr>
+        <td>为什么空白期角色要取反？</td>
+        <td>帧计数在"帧结束"沿已 +1，空白期处理的是"上一帧"的表</td>
+        <td><code>cdf_sel = frame_cnt[0]^1</code></td>
+      </tr>
+      <tr>
+        <td>为什么映射表只读不写？</td>
+        <td>映射表是上一帧"改造完成"的成品，写它就把成品弄脏了</td>
+        <td>分派里映射表 <code>wena=0</code></td>
+      </tr>
+      <tr>
+        <td>为什么清零用"写 0"而不是复位？</td>
+        <td>BRAM 阵列没有复位引脚，只能靠写入清零</td>
+        <td>CLEAR/PRE 阶段扫 256 格写 0</td>
+      </tr>
+    </table>
+
+    <!-- ================= 6. 举一反三 ================= -->
+    <h2>6. 举一反三：这套思想和后面每个大模块都是亲戚</h2>
+    <table>
+      <tr><th>场景</th><th>ping-pong 在哪</th><th>规模</th></tr>
+      <tr><td>本工程直方图均衡</td><td>统计表 / 映射表轮流</td><td>256 格 BRAM</td></tr>
+      <tr><td>AE / 3A 统计（ISP）</td><td>帧级统计表轮流（曝光/白平衡统计）</td><td>小表</td></tr>
+      <tr><td>DDR 帧存双缓冲</td><td>写帧 A 读帧 B，帧边界交换</td><td>整帧 DDR</td></tr>
+      <tr><td>显示器双缓冲</td><td>防画面撕裂的读写在两帧缓冲间切换</td><td>整帧</td></tr>
+    </table>
+    <p style="font-size:13px;line-height:2">
+      <b>面试表达</b>："ping-pong 解决的是'生产者要写、消费者要读同一份数据'的冲突——
+      用两份数据 + 角色互换，让读写永远打不到同一份。小到 256 格的 BRAM 统计表，
+      大到 DDR 里整帧图像的双缓冲，都是同一个套路，差别只在"角色切换"的粒度
+      （这里按帧换，DDR 那里也按帧换）。"
+    </p>
+
+    <!-- ================= 7. 自测 ================= -->
+    <h2>7. 自测：30 秒讲清楚这四问</h2>
+    <div class="quiz">
+      1. 为什么要两块表，一块行不行？<br>
+      2. stat_is_ram1 为什么直接取 frame_cnt 最低位？<br>
+      3. 帧 0 结束时 frame_cnt=1，空白期给哪块表做 CDF？为什么？<br>
+      4. 映射表为什么整帧都不写？
+    </div>
+
+    <p style="font-size:12px;color:#888;margin-top:28px;border-top:1px solid #eee;padding-top:12px">
+      配套阅读：histogram_tutorial/README.md（逐拍拆解 + 4 条踩坑记录）·
+      核心实现：histogram_tutorial/histeq_core.v（状态机 PRE→STAT→DRAIN→CDF→CLEAR→WAIT）
+    </p>
+
+  </div>
+</body>
+</html>

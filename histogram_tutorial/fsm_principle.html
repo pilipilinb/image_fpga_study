@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>直方图均衡状态机（FSM）梳理</title>
+  <style>
+    body {
+      font-family: "Microsoft YaHei", "PingFang SC", SimHei, sans-serif;
+      margin: 0; padding: 24px; background: #f5f7fa; color: #333;
+    }
+    .page { max-width: 1000px; margin: 0 auto; background: #fff; border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08); padding: 28px 36px 40px; }
+    h1 { font-size: 22px; color: #1f4e79; margin: 0 0 6px; }
+    .subtitle { font-size: 13px; color: #666; margin: 0 0 24px; }
+    h2 { font-size: 17px; color: #1f4e79; border-left: 4px solid #4a82c3; padding-left: 10px; margin: 32px 0 14px; }
+    h3 { font-size: 14px; color: #333; margin: 18px 0 8px; }
+
+    /* 状态机主循环：色块 + 文字箭头（无 SVG） */
+    .fsm-loop { text-align: center; font-size: 13px; line-height: 2.2;
+                background: #f8fafc; border: 1px solid #dde3ea; border-radius: 10px;
+                padding: 16px; margin: 14px 0; }
+    .st { display: inline-block; border: 2px solid #4a82c3; border-radius: 8px;
+          background: #eef4fb; padding: 4px 12px; font-weight: bold; color: #1f4e79; margin: 4px 2px; }
+    .st .code { font-size: 11px; font-weight: normal; color: #666; display: block; }
+    .st.prep { border-color: #d9822b; background: #fdf3ee; color: #a34b1f; }
+    .st.drain { border-color: #e07b00; background: #fdf6ec; color: #a34b1f; }
+    .st.cdf { border-color: #2e8b57; background: #eefaf0; color: #1a6b3c; }
+    .st.clear { border-color: #7a5bbf; background: #f3eefb; color: #5a3fa0; }
+    .arr { font-size: 20px; color: #888; margin: 0 6px; }
+    .cond { font-size: 11px; color: #999; }
+
+    /* 状态卡片 */
+    .scard { border: 1px solid #dde3ea; border-radius: 10px; padding: 14px 18px; margin: 12px 0;
+             border-left: 4px solid #4a82c3; }
+    .scard h3 { margin: 0 0 8px; color: #1f4e79; }
+    .scard table { margin: 6px 0; }
+    .scard .tag { display: inline-block; font-size: 11px; border-radius: 4px; padding: 1px 8px; margin-right: 6px; }
+    .tag.dur { background: #eef4fb; color: #1f4e79; }
+    .tag.why { background: #fdf3ee; color: #a34b1f; }
+    .tag.jmp { background: #eefaf0; color: #1a6b3c; }
+
+    /* 代码块 */
+    .code { background: #f8f9fb; border: 1px solid #dde3ea; border-radius: 8px; padding: 10px 14px;
+            margin: 8px 0; font-size: 12.5px; line-height: 1.7; overflow-x: auto; }
+    .code pre { margin: 0; font-family: Consolas, "Courier New", monospace; white-space: pre; }
+    .cmt { color: #6a9955; }
+    .hl { color: #c0341d; font-weight: bold; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 8px 0; }
+    th, td { border: 1px solid #dde3ea; padding: 7px 10px; text-align: center; }
+    th { background: #eef4fb; color: #1f4e79; }
+    tr:nth-child(even) td { background: #fafbfd; }
+    code { background: #f0f2f5; padding: 1px 6px; border-radius: 4px; font-size: 12px; color: #c0341d; }
+    ul { font-size: 13px; line-height: 2; padding-left: 22px; }
+    .tip { background: #fffbe8; border: 1px solid #e8d48a; border-radius: 8px; padding: 10px 14px;
+           margin: 10px 0; font-size: 13px; line-height: 1.9; }
+    .tip b { color: #a34b1f; }
+    .quiz { background: #f3f7fd; border: 1px solid #bcd2e8; border-radius: 8px; padding: 12px 16px;
+            margin: 10px 0; font-size: 13px; line-height: 2; }
+  </style>
+</head>
+<body>
+  <div class="page">
+
+    <h1>直方图均衡状态机（FSM）梳理</h1>
+    <p class="subtitle">
+      6 个状态各自干什么 · 状态之间怎么跳 · 谁数拍子谁记帧 · 和 ping-pong 怎么配合
+      （配套工程：histogram_tutorial/histeq_core.v，状态机约 30 行代码）
+    </p>
+
+    <!-- ================= 1. 全貌 ================= -->
+    <h2>1. 全貌：一个主循环，6 个状态</h2>
+    <div class="fsm-loop">
+      <span class="st prep">ST_PRE<span class="code">开机清零</span></span>
+      <span class="arr">→</span>
+      <span class="st">ST_WAIT<span class="code">等新帧</span></span>
+      <span class="arr">→</span>
+      <span class="st">ST_STAT<span class="code">统计+映射</span></span>
+      <span class="arr">→</span>
+      <span class="st drain">ST_DRAIN<span class="code">排空 2 拍</span></span>
+      <span class="arr">→</span>
+      <span class="st cdf">ST_CDF<span class="code">计数表→CDF 表</span></span>
+      <span class="arr">→</span>
+      <span class="st clear">ST_CLEAR<span class="code">映射表清零</span></span>
+      <span class="arr">→</span>
+      <span class="st">ST_WAIT<span class="code">等下一帧</span></span>
+      <span class="arr">→</span>
+      <span class="st">ST_STAT<span class="code">……循环</span></span>
+    </div>
+    <p style="font-size:13px;line-height:2">
+      三句话总结：
+    </p>
+    <ul>
+      <li><b>上电只走一次</b>：ST_PRE（清垃圾）→ ST_WAIT；</li>
+      <li><b>每帧走一圈</b>：ST_WAIT → ST_STAT（收像素）→ ST_DRAIN → ST_CDF → ST_CLEAR → 回 ST_WAIT；</li>
+      <li><b>过帧边界时角色互换</b>（统计表/映射表对调），靠 frame_cnt 最低位实现。</li>
+    </ul>
+
+    <!-- ================= 2. 逐个状态 ================= -->
+    <h2>2. 每个状态具体在干什么</h2>
+
+    <div class="scard">
+      <h3>ST_PRE —— 开机清零（只走一次）</h3>
+      <span class="tag dur">耗时：256 拍</span>
+      <span class="tag why">为什么存在：BRAM 上电内容不定</span>
+      <p style="font-size:13px;line-height:1.9">
+        开机后第一件事：把"统计表"（此时 frame_cnt=0，即 ram0）256 个格子全部写 0。
+        因为 BRAM 没有复位引脚，上电内容是垃圾（仿真里是 x，真实芯片是随机值），
+        而统计表必须从 0 开始数——只能靠写口逐格写 0 清零。
+        <b>如果跳过这步：帧 0 统计时没写过的格子全是 x，CDF 前缀和 x 一加全表全脏</b>（实测坑 1）。
+      </p>
+      <p style="font-size:13px;line-height:1.9">
+        <b>跳转</b>：clr_cnt 扫到 255（写完全部格子）→ ST_WAIT。
+      </p>
+    </div>
+
+    <div class="scard">
+      <h3>ST_WAIT —— 等新帧的第一颗像素</h3>
+      <span class="tag dur">耗时：帧间空白期</span>
+      <span class="tag jmp">跳走条件：y_en 拉高（新帧第一像素来了）</span>
+      <p style="font-size:13px;line-height:1.9">
+        什么都不干，就是等。像素计数 pix_cnt 归零（为下一帧数数做准备）。
+        当 y_en 从 0 跳 1（第一颗有效像素），立即进 ST_STAT，
+        且这一拍 pix_cnt 置 1（第一颗像素算第 1 个）。
+      </p>
+    </div>
+
+    <div class="scard">
+      <h3>ST_STAT —— 统计期（一帧的大头：11536 拍）</h3>
+      <span class="tag dur">耗时：一帧像素数</span>
+      <span class="tag why">同时干两件事：B 数数、A 查表</span>
+      <p style="font-size:13px;line-height:1.9">
+        两条流水线并行跑：
+      </p>
+      <ul>
+        <li><b>统计</b>：每来一颗像素，把"上一颗像素"的灰度计数 +1 写回统计表（双口错拍 RMW）；</li>
+        <li><b>映射</b>：每来一颗像素，读映射表 CDF[y]，乘 K 右移 S，输出均衡值 J（帧 0 除外，frame_cnt=0 时禁输出）。</li>
+      </ul>
+      <p style="font-size:13px;line-height:1.9">
+        同时有个"帧满检测"：pix_cnt 数到 N-1（=11535）就停，等 y_en 拉低（帧末空白）→
+        frame_done=1 → <b>帧干完了，frame_cnt +1，跳 ST_DRAIN</b>。
+      </p>
+      <div class="code"><pre>
+<span class="cmt">// 帧满 = 数到 N-1 且这一拍没有新像素（空白确认）</span>
+wire frame_full = (pix_cnt == N - 1);
+wire frame_done = frame_full &amp;&amp; !y_en;
+...
+if (frame_done) frame_cnt &lt;= frame_cnt + 1'b1;   <span class="cmt">// 帧数 +1（角色互换的种子）</span></pre></div>
+    </div>
+
+    <div class="scard">
+      <h3>ST_DRAIN —— 帧末排空（2~3 拍）</h3>
+      <span class="tag dur">耗时：2 拍（drain_cnt 数到 2）</span>
+      <span class="tag why">为什么存在：流水的尾巴不能丢</span>
+      <p style="font-size:13px;line-height:1.9">
+        帧结束的瞬间，最后几颗像素的映射结果还在输出流水里（读口晚 1 拍 + 输出寄存 1 拍 =
+        还在流水里 2 拍）。如果立刻把读口抢去做 CDF 扫描，<b>最后一颗像素的 J 就丢了</b>（实测坑 3）。
+        所以停 2 拍：端口分派保持 ST_STAT 的样子（映射继续吐），但 y_en 已拉低、没有新像素进来。
+      </p>
+      <p style="font-size:13px;line-height:1.9">
+        <b>跳转</b>：drain_cnt 数到 2 → ST_CDF。
+      </p>
+    </div>
+
+    <div class="scard">
+      <h3>ST_CDF —— 统计表改造成映射表（257 拍）</h3>
+      <span class="tag dur">耗时：257 拍 = 256 格写回 + 首拍空转</span>
+      <span class="tag jmp">跳走条件：cdf_cnt 扫到 256</span>
+      <p style="font-size:13px;line-height:1.9">
+        把"刚统计完的计数表"原地改造成"CDF 表"（前缀和）：
+        读口扫格子 0..255，累加器 acc 逐格累加，写口把"累加和"写回上一格。
+        扫完一块表 = 每个格子从"出现次数"变成"累计出现次数"。
+        <b>跳转</b>：cdf_cnt 到 256（257 拍后）→ ST_CLEAR。
+      </p>
+    </div>
+
+    <div class="scard">
+      <h3>ST_CLEAR —— 映射表清零（256 拍）</h3>
+      <span class="tag dur">耗时：256 拍</span>
+      <span class="tag why">为什么必须清：下一帧它要当统计表</span>
+      <p style="font-size:13px;line-height:1.9">
+        把"刚用完的映射表"全部格子写 0。因为下一帧它就要当统计表，计数必须从 0 起算；
+        而 BRAM 不能复位，只能写入清零。
+        <b>跳转</b>：clr_cnt 扫到 255 → ST_WAIT（等下一帧，角色已互换）。
+      </p>
+    </div>
+
+    <!-- ================= 3. 跳转总表 ================= -->
+    <h2>3. 状态跳转总表（背下来这张表就够）</h2>
+    <table>
+      <tr><th>状态</th><th>在干嘛</th><th>离开条件</th><th>跳去哪</th></tr>
+      <tr><td><b>ST_PRE</b></td><td>统计表写 0（开机一次）</td><td>clr_cnt == 255</td><td>ST_WAIT</td></tr>
+      <tr><td><b>ST_WAIT</b></td><td>等新帧</td><td>y_en == 1（第一颗像素）</td><td>ST_STAT</td></tr>
+      <tr><td><b>ST_STAT</b></td><td>统计 + 映射（一帧大头）</td><td>frame_done（数满+空白）</td><td>ST_DRAIN</td></tr>
+      <tr><td><b>ST_DRAIN</b></td><td>排空输出流水</td><td>drain_cnt == 2</td><td>ST_CDF</td></tr>
+      <tr><td><b>ST_CDF</b></td><td>计数表 → CDF 表（257 拍）</td><td>cdf_cnt == 256</td><td>ST_CLEAR</td></tr>
+      <tr><td><b>ST_CLEAR</b></td><td>映射表写 0（256 拍）</td><td>clr_cnt == 255</td><td>ST_WAIT</td></tr>
+    </table>
+
+    <!-- ================= 4. 计数器分工 ================= -->
+    <h2>4. 谁在数什么：计数器和状态机的关系</h2>
+    <table>
+      <tr><th>信号</th><th>归哪个状态管</th><th>干什么</th><th>位宽</th></tr>
+      <tr><td><code>state / state_nxt</code></td><td>全局</td><td>当前状态 / 下一拍状态</td><td>3bit（6 态）</td></tr>
+      <tr><td><code>frame_cnt</code></td><td>ST_STAT 的 frame_done 沿</td><td>已完成的帧数；最低位 = 角色互换开关；≥1 = 允许输出</td><td>2bit</td></tr>
+      <tr><td><code>pix_cnt</code></td><td>ST_STAT / ST_WAIT</td><td>数本帧像素，数到 N-1 停（帧满判定）</td><td>15bit</td></tr>
+      <tr><td><code>drain_cnt</code></td><td>ST_DRAIN</td><td>数 2 拍排空</td><td>2bit</td></tr>
+      <tr><td><code>cdf_cnt</code></td><td>ST_CDF</td><td>扫 0..256（257 拍），既是读地址又是完成计数</td><td>9bit</td></tr>
+      <tr><td><code>clr_cnt</code></td><td>ST_CLEAR / ST_PRE</td><td>扫 0..255（256 拍），写地址 + 完成计数</td><td>8bit</td></tr>
+      <tr><td><code>acc</code></td><td>ST_CDF</td><td>前缀和累加器（顺带在 CLEAR/PRE 复位）</td><td>14bit</td></tr>
+    </table>
+    <div class="tip">
+      <b>设计套路</b>：每个"等待多久"的状态都配一个计数器，<b>计数器数到顶 = 状态跳走</b>。
+      CDF 用 cdf_cnt（既是扫描地址又是完成计数），CLEAR 用 clr_cnt，DRAIN 用 drain_cnt——
+      一个计数器干两件事，不用额外写"等待 N 拍"的逻辑。
+    </div>
+
+    <!-- ================= 5. 面试锚点 ================= -->
+    <h2>5. 三个理解锚点（面试讲状态机就讲这三点）</h2>
+    <table>
+      <tr><th>锚点</th><th>一句话解释</th></tr>
+      <tr>
+        <td>为什么有 ST_DRAIN？</td>
+        <td>输出流水还剩 2 拍尾巴，状态切换不能抢走读口——"流水的尾巴最容易被状态机吃掉"</td>
+      </tr>
+      <tr>
+        <td>为什么 CDF 是 257 拍？</td>
+        <td>256 格写回 + 首拍空转（读口晚 1 拍，第一拍没有"上一格"可写）</td>
+      </tr>
+      <tr>
+        <td>角色什么时候换？</td>
+        <td>frame_cnt 在"帧结束沿"（进 DRAIN 时）+1，所以空白期要用 cdf_sel = frame_cnt[0]^1 回退一帧，否则清错表（实测坑 4）</td>
+      </tr>
+    </table>
+
+    <!-- ================= 6. 自测 ================= -->
+    <h2>6. 自测：30 秒讲清楚</h2>
+    <div class="quiz">
+      1. 一帧从开始到结束，状态机依次走哪几个状态？<br>
+      2. ST_PRE 为什么只走一次？跳过它会出什么问题？<br>
+      3. ST_STAT 里"帧满"的判定条件是什么？为什么"数满"之后还要等 y_en 拉低？<br>
+      4. ST_DRAIN 存在的原因是什么？它和输出 valid 链（2 拍）是什么关系？<br>
+      5. CDF 257 拍和 CLEAR 256 拍差的那 1 拍差在哪？<br>
+    </div>
+
+    <p style="font-size:12px;color:#888;margin-top:28px;border-top:1px solid #eee;padding-top:12px">
+      配套阅读：<code>pingpong_principle.html</code>（双 BRAM 角色互换思想）·
+      histogram_tutorial/README.md（逐拍拆解 + 4 条踩坑记录）·
+      核心实现：histogram_tutorial/histeq_core.v
+    </p>
+
+  </div>
+</body>
+</html>

@@ -41,17 +41,19 @@ wire [DW-1:0] out_b = (in < ob) ? {DW{1'b0}} : (in - ob);
 
 BLC 需要知道每个像素的 Bayer 相位来选 OB 通道。相位计数器语义必须是：
 
-> **fire 拍读到的 `{row_p, col_cnt[0]}` == 当前正在消费像素的相位；拍末推进到下一像素。**
+> **fire 拍读到的 `{row_cnt[0], col_cnt[0]}` == 当前正在消费像素的相位；拍末推进到下一像素。**
 
-踩过的坑：最初把 sof 分支写成"清零 col"——本拍消费了 (0,0) 后拍末 col=0，**下一拍 (0,1) 读到的还是 0，整帧相位斜一列**（TB 场景 A 从 k=1 起全错，但收发计数正常、B/C/D 场景因数据重复侥幸无感）。正确写法：
+踩过的坑：最初把 sof 分支写成"清零 col"——本拍消费了 (0,0) 后拍末 col=0，**下一拍 (0,1) 读到的还是 0，整帧相位斜一列**（TB 场景 A 从 k=1 起全错，但收发计数正常、B/C/D 场景因数据重复侥幸无感）。正确写法（完整行列计数，与 DPC 同构；sof/eol 显式同步）：
 
 ```verilog
-if (in_sof)      begin row_p <= 0; col_cnt <= 1; end              // 本拍是 (0,0)，下一拍 (0,1)
-else if (in_eol) begin row_p <= ~row_p; col_cnt <= 0; end         // 下一拍是新行第 0 列
-else                  col_cnt <= (col_cnt==IMG_W-1) ? 0 : col_cnt+1;  // 回绕双保险兜 eol 丢失
+if (in_sof)      begin row_cnt <= 0; col_cnt <= 1; end              // 本拍是 (0,0)，下一拍 (0,1)
+else if (in_eol) begin row_cnt <= row_cnt + 1; col_cnt <= 0; end    // 下一拍是新行第 0 列
+else                  col_cnt <= (col_cnt==IMG_W-1) ? 0 : col_cnt+1;  // 回绕兜底 eol 丢失
 ```
 
-第二个隐蔽点：**跨帧行奇偶残留**——上帧 eol 后 `row_p = H&1`，H 为奇时下一帧 sof 拍读到 1。解法：**sof 拍的 OB 选择与 out_phase 强制 00**（sof 拍像素恒为 (0,0)），`row_p` 拍末同时清零。从此任意帧宽/帧高、任意反压时序下相位严格对齐。
+第二个隐蔽点：**跨帧行奇偶残留**——上帧末 `row_cnt=H`，H 为奇时下一帧 sof 拍读到 1。解法：**sof 拍的 OB 选择与 out_phase 强制 00**（sof 拍像素恒为 (0,0)），`row_cnt` 拍末同时清零。从此任意帧宽/帧高、任意反压时序下相位严格对齐。
+
+（重构说明：计数器最终采用与 `DPC/top_dpc.v` 同构的**完整行列计数 + 组合译码**风格——`{row_cnt[0], col_cnt[0]}` 即当前像素相位，可读性更好；但保留 sof/eol 显式同步，这正是与 DPC 老写法"靠 IMG_H/IMG_W 盲数数回绕"的本质差别：盲数数在丢 1 拍时永久错位无自愈，显式同步最多错到下一个 eol/sof。）
 
 与行缓存类模块的区别：BLC 的相位**本质依赖行结构**，上游必须给 sof/eol（契约中 CSI-2 RX 恒给 tuser/tlast）；不像 line_buffer 那样"eol 悬空也能跑"。
 

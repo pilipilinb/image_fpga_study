@@ -1,12 +1,13 @@
 //========================================================================
 // tb_isp_chain.v —— M5.3 八级 ISP 整链自检 TB（AXIS(RAW10) 进 / AXIS(RGB888) 出）
 //
-// 编译（TB 头部 `include 顶层，只编译 TB）：
-//   small: iverilog -o tb_isp_chain.vvp -DNOVCD -I . -I ..\BLC -I ..\Bayer_DPC_Demosaic \
+// 编译（TB 头部 `include 顶层，只编译 TB；★ 链里已接 M6 AWB（awb_top）→ 必须 -I ..\AWB）：
+//   small: iverilog -o tb_isp_chain.vvp -DNOVCD -I . -I ..\AWB -I ..\BLC -I ..\Bayer_DPC_Demosaic \
 //          -I ..\BilateralFilter -I ..\CCM -I ..\Gamma -I ..\Sharpen -I ..\AxisOut \
 //          -I ..\line_buffer\line_buffer_fifo_nxn -I ..\fifo tb_isp_chain.v
 //   img  : 同上去掉 -DNOVCD、加 -DIMG
 //   跑：vvp tb_isp_chain.vvp（★ 一律在看门狗下跑）→ verify_isp_chain.py
+//   （AWB 真增益整链实验在 ../AWB/：make_awb_chain_data.py + tb_awb_chain.v + verify_awb_chain.py）
 //
 // 期望由 make_chain_data.py 预生成：chain_in_small/img.hex（RAW10）
 //                                   exp_small/img.hex（末端 RGB888 24bit）
@@ -51,7 +52,7 @@ module tb_isp_chain;
 
     // 四通道黑电平（R/Gr/Gb/B），与 make_chain_data.py 一致
     localparam [DW-1:0] OB00 = 100, OB01 = 64, OB10 = 180, OB11 = 32;
-    localparam [9:0]    GAIN1 = 256;          // AWB 增益 1.0（Q2.8）
+    localparam [9:0]    GAIN1 = 256;          // AWB 写口恒 1.0（Q2.8）→ 恒等回归
 
     reg  aclk = 0, aresetn = 0;
     always #5 aclk = ~aclk;
@@ -67,7 +68,7 @@ module tb_isp_chain;
     wire              m_tvalid, m_tlast, m_tuser;
     reg               bp_denoise = 0, bp_ccm = 0, bp_gamma = 0, bp_sharpen = 0;
     reg  [9:0]        sho_k = 128;            // k = 0.5
-    wire [31:0]       st00, st01, st10, st11; // AWB 统计占位
+    wire [31:0]       st00, st01, st10, st11; // AWB 统计快照组（本 TB 只做恒等回归）
 
     isp_chain_top #(
         .DW(DW), .OW(OW), .IMG_W(IMG_W), .IMG_H(IMG_H),

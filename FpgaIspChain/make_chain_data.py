@@ -74,14 +74,26 @@ def awb(pix, w, gains=(GAIN1, GAIN1, GAIN1, GAIN1), gf=GF):
     return out
 
 
+def psnr8(a, b):
+    """末端 RGB888 vs 靶子（8bit 三通道口径），与 M5.3 报告同一算法"""
+    mse, n = 0, len(a)
+    for x, y in zip(a, b):
+        for sh in (16, 8, 0):
+            mse += (((x >> sh) & 0xFF) - ((y >> sh) & 0xFF)) ** 2
+    n *= 3
+    return 10 * math.log10(255.0 * 255.0 * n / mse) if mse > 0 else float('inf')
+
+
 def chain_ref(raw, w, h, lut, inv, mint, glut, kg=KG_DEF, kf=KF,
-              bp_denoise=False, skip_dpc_denoise=False):
+              bp_denoise=False, skip_dpc_denoise=False,
+              awb_gains=(GAIN1, GAIN1, GAIN1, GAIN1)):
     """单帧整链参考；返回逐级结果字典 {s1..s8}。
        bp_denoise=True 时降噪段旁路（等延迟恒等）——用于"不降噪基线"；
-       skip_dpc_denoise=True 时同时跳过 DPC 与降噪——用于"DPC/降噪都关"的最差基线。"""
+       skip_dpc_denoise=True 时同时跳过 DPC 与降噪——用于"DPC/降噪都关"的最差基线；
+       awb_gains 非全 1.0 时 AWB 级按相位乘增益（M6 真增益闭环用）。"""
     s1 = blc(raw, w, h)                                     # 10bit
     s2 = s1 if skip_dpc_denoise else dpc_ref(s1, w, h, THR)  # 10bit
-    s3 = awb(s2, w)                                         # 10bit（gain=1.0 → 恒等）
+    s3 = awb(s2, w, awb_gains)                              # 10bit（gain=1.0 → 恒等）
     s4 = demosaic_bilinear_ref(s3, w, h)                    # 30bit
     s5 = s4 if (bp_denoise or skip_dpc_denoise) else bilateral_ref(s4, w, h, lut, inv)
     s6 = ccm_ref(s5, mint)                                  # 30bit
@@ -174,14 +186,6 @@ def main():
     save_hex(noisy,     'chain_in_img.hex', DW)
     save_hex(raw_ideal, 'ideal_in_img.hex', DW)
     save_hex(exp['s8'], 'exp_img.hex', 24)
-
-    def psnr8(a, b):
-        mse, n = 0, len(a)
-        for x, y in zip(a, b):
-            for sh in (16, 8, 0):
-                mse += (((x >> sh) & 0xFF) - ((y >> sh) & 0xFF)) ** 2
-        n *= 3
-        return 10 * math.log10(255.0 * 255.0 * n / mse) if mse > 0 else float('inf')
 
     print('========================================')
     print(f'img：{W_IMG}×{H_IMG}，注入高斯噪声 σ={SIGMA_N}（10bit）+ {len(pos)} 个坏点，OB={OB}')

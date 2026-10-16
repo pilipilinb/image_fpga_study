@@ -61,7 +61,7 @@
 | **出端 AXIS 适配（M5.1）** | 链路出口 / 基础设施 | 简流(RGB888)→AXIS(tdata/tkeep=111/tuser/tlast)+弹性 FIFO；S2MM 契约逐条核对（fire 3072=收 3072、帧 16、行 192） |
 | **RGB 三段链 + 顺序实验（M5.2）** | 降噪→CCM→Gamma 串联（30bit→RGB888） | `rgb_chain_top.v` + `SWAP_DC` 单参数切顺序；**不可交换**（98.2% 像素位级不同）、**降噪在前优 1.51 dB**（28.67 vs 27.16 dB、SSIM 0.9323 vs 0.9147）、色差噪声 17.81 vs 26.32、CCM 饱和 75 vs 381（5.1×）；两顺序 TB 全 PASS + 独立复算 0 误差 |
 | **BLC/DPC 顺序实验** | BLC↔DPC 串联（RAW10 含 OB） | `blc_dpc_top.v` + `SWAP_BD` 单参数切顺序；**结论分相位**：R/B 中心不下溢即**位级可交换**（差异仅 3/25），**G 中心天然不可交换**（DPC 把 Gr/Gb 当同色邻居，而 `OB[Gr]=64 ≠ OB[Gb]=180` 差 **116 LSB**）；质量几乎等价（0.22% 像素、0.38 dB）⇒ 顺序由**契约/量纲**决定；★ 方法论亮点 = **预测被实测证伪两次后打印相位分布定位真因** |
-| **八级 ISP 整链（M5.3）** | 8 级串联（AXIS RAW10 进 → AXIS RGB888 出） | `isp_chain_top.v` = BLC→DPC→**AWB(1 拍 1.0 占位)**→Demosaic→降噪→CCM→Gamma→锐化 + 两端 AXIS 适配；逐级位级 **0 误差**（真图 4 帧 46144/46144 + 逐级独立复算）；端到端 PSNR 26.77dB（全关 22.05）；**OOC 时序 −0.939ns/26 级 → +1.589ns/17 级**（违例根因=M3 遗留的 DPC 内部路径，修法=窗口寄存器）；**级间 0 FIFO**（先量后加：入口造行 stall ≈6·W，Demosaic 后各级 stall 恒 0） |
+| **八级 ISP 整链（M5.3）** | 8 级串联（AXIS RAW10 进 → AXIS RGB888 出） | `isp_chain_top.v` = BLC→DPC→**AWB(M6 真实现)**→Demosaic→降噪→CCM→Gamma→锐化 + 两端 AXIS 适配；逐级位级 **0 误差**（真图 4 帧 46144/46144 + 逐级独立复算）；端到端 PSNR 26.77dB（全关 22.05）；**AWB 闭环（M6 `-DAWB`）：4 帧位级 0 误差 + PSNR 15.73→34.28dB**；**OOC 时序 −0.939ns/26 级 → +1.589ns/17 级**（违例根因=M3 遗留的 DPC 内部路径，修法=窗口寄存器）；**级间 0 FIFO**（先量后加：入口造行 stall ≈6·W，Demosaic 后各级 stall 恒 0） |
 | **行缓存（LINE_BUFFER）** | 邻域运算地基 | N×N 窗口生成器，卷积/缩放/滤波的复用底座；含 FIFO 版（支持反压 + 可换 IP） |
 | **色彩空间转换（CSC）** | 逐像素点运算 | RGB → YCbCr（BT.601），1 对 1 映射，不需要行缓存 |
 | **双线性插值缩放（bilinear）** | 邻域运算 | 任意整数倍缩放（放大 N 倍 / 缩小 N 倍）；v3 整图 ROM 版 + v4 行缓存版（大图/实时视频） |
@@ -195,7 +195,7 @@ CSI-2 RX ─AXIS─► [AXIS 适配 + 入端弹性 FIFO]
 | DPC 坏点校正 | Bayer | RAW → RAW | 5×5 窗口 | ✅ 新链路版（Month-2 M3：`dpc_envelope_dw.v` DW 参数化 + 简流反压；RAW10 注 60 坏点 28.33→38.84dB；8bit 旧版 26.43→31.91dB） |
 | Demosaic 去马赛克 | Bayer → RGB | RAW10 → RGB(3×10bit)（线性域直通，缩减在 Gamma 出口） | 5×5 窗口 | ✅ 新链路版（Month-2 M3：双线性/MHC 双核 DW 参数化换核不改线；RGB 域 10bit 口径 DPC 后 40.38dB；8bit 旧版 26.05/29.23dB） |
 | 降噪 | RGB | RGB → RGB | 3×3 窗口 | ✅ 新链路版（M4-1 `BilateralFilter/`：双边滤波 10bit 域 + bypass，位级 0 误差；PSNR 32.03dB / 边缘区 SSIM 0.9464 > 高斯 0.9453）。**OOC 时序 40 级/−5.804ns ❌ → 13 级/+2.145ns ✅ @150MHz**（三轮拆流水，详见其 README「时序收敛实战」）。历史 8bit 三套可选（均值/高斯/中值）保留 |
-| AWB 自动白平衡 | **Bayer（RAW）** | RAW → RAW | **帧级统计**（按 R/Gr/Gb/B 相位分组）+ 增益应用 | 未实现（M6 最后做：增益应用级 = 与 blc_core 同构的相位选增益乘法，插 **DPC→Demosaic 之间**；统计级接 DPC 出，双 BRAM 乒乓"统计第 N 帧、增益第 N+1 帧生效"；软核闭环 MicroBlaze 裸机 C；M4/M5 期间 1.0 直通占位）。**WB 在去马赛克前** = 工业主流（Bayer 域每像素 1 次乘法省 3×、先平衡再插值伪彩少；对角阵 WB 必须在满阵 CCM 之前） |
+| AWB 自动白平衡 | **Bayer（RAW）** | RAW → RAW | **帧级统计**（按 R/Gr/Gb/B 相位分组）+ 增益应用 | 🔶 **M6 进行中（Step 0~3 ✅）**：`AWB/` 统计级 + 增益级 + 闭环联调（**统计帧 N → 帧 N+2 起生效**，位级验证；推迟 1 帧容错演练通过）；整链已换真实现（`awb_top`，数据面零改）——**真增益模式 PSNR 15.73→34.28 dB**、恒等回归全 PASS；Step 4（AXI-Lite 从机）/ Step 5（上板 MicroBlaze 闭环）待做。计划见 [AWB/M6实施计划.md](AWB/M6实施计划.md)。**WB 在去马赛克前** = 工业主流（Bayer 域每像素 1 次乘法省 3×、先平衡再插值伪彩少；对角阵 WB 必须在满阵 CCM 之前） |
 | CCM 色彩校正矩阵 | RGB | RGB → RGB | 无（3×3 矩阵乘） | ✅ M4-2 `CCM/`：Q5.12 有符号定点 + 饱和，LAT=2，等延迟 bypass；位级 0 误差 + 灰阶逐位保持 + 色卡 ΔE 12.14→0.12。**全链唯一用 DSP 的一级** |
 | Gamma 伽马校正 | RGB | RGB → RGB（**10bit → 8bit**） | 无（LUT） | ✅ M4-3 `Gamma/`：1024×8 LUT（3 份并行副本）+ 同步读 LAT=1；**全链位宽缩减唯一出口**；穷举 1024 项全表 0 误差 + 单调性/端点通过；亮度 101.34→164.77（+62.6%） |
 | 锐化 | RGB（感知域） | RGB888 → RGB888 | 3×3 窗口 | ✅ M5.1 `Sharpen/`：USM `orig + k·(orig−blur)`，blur 用 0 乘法器高斯；修正量"符号-幅值"两路 + k 10bit 端口；核 LAT=2、stage 总延迟 3（窗口寄存器 + 核拆分）；bypass 排空点切换；三模式 TB 全 PASS + Tenengrad +9.3%；**OOC 时序 35 级/−1.930ns → 15 级/+2.583ns ✅**。出端 AXIS 适配见 M5.1 `AxisOut/`（S2MM 契约逐条通过） |
@@ -210,7 +210,7 @@ CSI-2 RX ─AXIS─► [AXIS 适配 + 入端弹性 FIFO]
 4. **显式帧同步**：用 `tlast` / `tuser(SOF)` 做帧边界，替代"行列计数器 + 帧末回绕"（计数器回绕在多帧连续流下已暴露过相位错位的坑）
 5. **跨时钟域隔离**：CSI-2 RX 的像素时钟与 AXI 系统时钟不同源 → 级间加 AXIS FIFO（本项目已有 `axis_fifo` 实战经验）
 6. **控制面走 AXI-Lite**：每级的系数/阈值（BLC 偏置、DPC 阈值、AWB 增益、CCM 系数、Gamma 表、锐化强度）都要可配 → 每级一组寄存器或统一寄存器文件，由 Microblaze 写入
-7. **AWB 的帧延迟**：整帧统计必须"统计第 N 帧、应用到第 N+1 帧"→ 增益寄存器延迟一帧生效，与 VDMA 双缓冲配合（本项目已有 `histeq_core` 双 BRAM 乒乓的帧级统计经验可复用）
+7. **AWB 的帧延迟**：帧边界封存统计（帧 N）→ 软核在帧 N+1 期间计算 → **帧 N+2 起生效**（连续流下 SOF 是唯一安全的增益采样点，口径见 [AWB/M6实施计划.md](AWB/M6实施计划.md) §3.3）；增益在帧边界**整组原子**生效，与 VDMA 双缓冲配合（本项目已有 `histeq_core` 双 BRAM 乒乓的帧级统计经验可复用）
 8. **CCM/锐化需要乘法**：与"零乘法器"惯例的取舍——滤波/插值这类能用移位+加法的继续用；3×3 矩阵乘法用 DSP48（先定量预算 DSP 用量）
 9. **资源与时序**：8 级级联前先估 BRAM/DSP/LUT 预算；每级 OOC 综合 + 整链时序收敛；上板用 ILA 抓关键节点（本项目已有 mark_debug/ILA 调试经验）
 10. **验证策略沿用**：逐级位级全等（RTL vs Python 参考）+ 整链 PSNR + 上板实拍对比
@@ -780,9 +780,9 @@ ISP 链**最后一级**（M5.1）。输入 = M4-3 Gamma 出的 **RGB888 24bit �
 
 ### ISP_CHAIN · 八级 ISP 整链（M5.3，AXIS RAW10 进 → AXIS RGB888 出）
 
-把前面 5 个阶段串成**一条完整流水**：`AXIS(RAW10) →[入端适配]→ BLC → DPC → AWB(1 拍 1.0 占位) → Demosaic → 降噪 → CCM → Gamma → 锐化 →[出端适配]→ AXIS(RGB888, tkeep=111)`。
-AWB 放的**1 拍 1.0 增益占位**不是"空着"——它把**位置/延迟/端口**按最终形态定死（顶层已预留 `awb_gain_00..11` 与 `awb_stat_00..11`），
-M6 接真 AWB 时**顶层与下游零改动**、端到端 golden 不用重算。
+把前面 5 个阶段串成**一条完整流水**：`AXIS(RAW10) →[入端适配]→ BLC → DPC → AWB(M6 真实现：awb_top) → Demosaic → 降噪 → CCM → Gamma → 锐化 →[出端适配]→ AXIS(RGB888, tkeep=111)`。
+AWB 原**1 拍 1.0 增益占位**把**位置/延迟/端口**按最终形态定死；**M6 已换真实现（`AWB/awb_top.v`）**——
+数据面零改、仅新增 `awb_frame_cnt`/`awb_irq` 两输出，端到端 golden 不变；软核闭环"统计帧 N → 帧 N+2 起生效"已位级验证（见 [AWB/M6实施计划.md](AWB/M6实施计划.md)）。
 目录见 [FpgaIspChain/](FpgaIspChain/README.md)，设计推导见 [八级ISP整链设计与验证.md](FpgaIspChain/八级ISP整链设计与验证.md)，面试叙事版见 [面试故事集.md](面试故事集.md) 故事 5。
 
 **验证（全 [PASS]）**：协议 TB（16×12×6 帧，A 满速 / B 汇随机 50% / C 汇长拉低）`1152/1152`、真图（112×103 连发 4 帧）`46144/46144`，
@@ -791,6 +791,10 @@ M6 接真 AWB 时**顶层与下游零改动**、端到端 golden 不用重算。
 **逐级插桩 PSNR（每级 vs 理想输入同级输出）**：BLC 24.54 → **DPC 26.16**（修坏点 +1.6）→ AWB 26.16（恒等）→ Demosaic 28.39 → **降噪 31.16（峰值 +2.8）** → CCM 27.16 → Gamma 27.59 → 锐化 26.77。
 
 **端到端 PSNR（RGB888 vs 理想靶子）**：DPC/降噪全关 **22.05** → 仅降噪关 23.00 → **整链 26.77 dB**。
+
+**AWB 闭环（M6 实验，全在 [AWB/](AWB/README.md) 下）**：偏色 RAW（R×0.65、B×1.35，同噪声/坏点）4 帧 → 软核闭环——帧 0/1 增益 1.0、帧 2/3 收敛增益，
+TB 位级 0 误差 + 独立复算 0 误差；**PSNR 15.73 → 34.28 dB（+18.55）**，通道均值拉回靶子水平；图 [AWB/awb_chain_compare.png](AWB/awb_chain_compare.png)。
+**整链 OOC 复检**：AWB 真实现接入后先 +1.323ns/18 级（反压链串进乘法器）→ 修 mux 选源（不接 ready）→ **+1.589ns/17 级 ✅ 恢复基线**。
 
 **★ 时序（整链 OOC @150MHz，顶层 `isp_chain_top`）**：集成初版 **−0.939ns / 26 级 ❌** → 修后 **+1.589ns / 17 级 ✅**。
 违例根因**不是"反压跨 8 级"**（那族 MET +1.9ns），而是 **M3 遗留的 DPC 级内部路径**——行缓存 pad mux（组合）与核内极值树挤在同一拍
@@ -915,8 +919,14 @@ image_fpga_study/
 │   ├── make_blc_dpc_data.py / verify_blc_dpc.py
 │   ├── blc_dpc_compare.png
 │   ├── BLC_DPC实现计划.md / README.md
-├── FpgaIspChain/              # M5.3 八级 ISP 整链（AXIS RAW10 进 → AXIS RGB888 出；AWB 1 拍占位；级间 0 FIFO）
-│   ├── isp_chain_top.v / awb_stub.v
+├── AWB/                       # M6 自动白平衡（统计 awb_stat + 增益 awb_gain + 封装 awb_top；闭环 tb_awb_loop；整链实验 tb_awb_chain）
+│   ├── awb_stat.v / awb_gain.v / awb_top.v
+│   ├── tb_awb_stat.v / tb_awb_gain.v / tb_awb_loop.v / tb_awb_chain.v
+│   ├── make_awb_data.py / verify_awb.py
+│   ├── make_awb_chain_data.py / verify_awb_chain.py
+│   ├── M6实施计划.md / README.md
+├── FpgaIspChain/              # M5.3 八级 ISP 整链（AXIS RAW10 进 → AXIS RGB888 出；M6 已接真 AWB；级间 0 FIFO）
+│   ├── isp_chain_top.v（AWB 真实现见 ../AWB/awb_top.v） / awb_stub.v（历史留存）
 │   ├── tb_isp_chain.v
 │   ├── make_chain_data.py / verify_isp_chain.py
 │   ├── isp_chain_compare.png

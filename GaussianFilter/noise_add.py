@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# noise_add.py —— 给输入图像加高斯噪声，并对比高斯滤波前后效果（GaussianFilter 工程，复用均值去噪脚本）
+# noise_add.py —— 给输入图像加高斯噪声，并对比均值滤波前后效果（MeanFilter 工程）
 #
 # 用法：
 #   1. 生成噪声仿真输入（读 input.hex → 高斯噪声 → noise.hex + noise_preview.png）：
@@ -73,7 +73,7 @@ def preview(px, path, w, h):
 
 
 def main():
-    ap = argparse.ArgumentParser(description='高斯噪声 + 高斯滤波前后对比')
+    ap = argparse.ArgumentParser(description='高斯噪声 + 均值滤波前后对比')
     ap.add_argument('--in-hex', default='input.hex', help='原图 hex（默认 input.hex）')
     ap.add_argument('--out-hex', default='noise.hex', help='噪声图 hex 输出（默认 noise.hex）')
     ap.add_argument('--sigma', type=int, default=20, help='高斯噪声标准差（默认 20）')
@@ -82,7 +82,7 @@ def main():
     ap.add_argument('--compare', action='store_true', help='对比模式：拼 原图|噪声|滤波后 图 + PSNR')
     ap.add_argument('--full', action='store_true', help='滤波输出为全尺寸（pad 版，H×W，直接逐像素比）')
     ap.add_argument('--out-coe', default='output.coe', help='仿真输出 COE（对比模式用）')
-    ap.add_argument('--png', default='gaussian_filter_compare.png', help='对比图输出路径')
+    ap.add_argument('--png', default='mean_filter_compare.png', help='对比图输出路径')
     args = ap.parse_args()
 
     if args.compare:
@@ -156,7 +156,7 @@ def main():
         print(f'OK: {args.in_hex} → {args.out_hex}（高斯噪声 sigma={args.sigma}）')
         print(f'噪声图 vs 原图 PSNR = {psnr_noise:.2f} dB')
         print(f'预览图已保存: noise_preview.png')
-        print('下一步: iverilog -DNOISE -I . -o tb.vvp tb_gaussian_filter.v → vvp → python noise_add.py --compare')
+        print('下一步: iverilog -DNOISE -I . -o tb.vvp tb_mean_filter.v → vvp → python noise_add.py --compare')
 
 
 if __name__ == '__main__':

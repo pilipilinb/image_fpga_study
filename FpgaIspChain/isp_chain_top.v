@@ -20,10 +20,11 @@
 //   两端（入端 ENTRY_FIFO_EN / 出端 OUT_FIFO_DEPTH）本就是弹性缓冲，
 //   把"反压通路"的头尾护住。
 //
-// 【顶层的 AWB 端口按最终形态预留在位】
-//   · 增益 gain_00/01/10/11（Q2.8，1.0=256）：占位期全给常数即可；
-//   · 统计 stat_00/01/10/11（32bit）：留给 M6 的 AWB 统计（现恒 0）。
-//   这样 M6 做完 AWB 不需要再改本顶层接口。
+// 【AWB = M6 真实现（已接入，替换 M5.3 的 awb_stub）】
+//   · gain_00/01/10/11 = 写口（inactive）：模块在每帧首像素拍采样生效（帧内恒定）；
+//   · stat_00..11 + frame_cnt + irq = 统计快照组（软核/从机读；fc≥2 起有效，
+//     fc=m 的 stat 对应"第 m-1 帧"的统计）；
+//   · 数据面零改、延迟仍 1 拍（stat 0 拍透传 + gain 1 拍）⇒ golden 不变。
 //
 // 【反压语义】出端 AXIS.tready → 出端 FIFO → 逐级简流 ready → ... → 入端 FIFO → s_axis_tready
 //   每一级内部都是"冻结+保持"结构，反压可无限期（数据不丢、不乱序）。
@@ -35,7 +36,7 @@
 `include "blc_axis_adapter.v"
 `include "blc_core.v"
 `include "dpc_stage.v"
-`include "awb_stub.v"
+`include "awb_top.v"
 `include "demosaic_stage.v"
 `include "denoise_stage.v"
 `include "ccm_stage.v"
@@ -75,7 +76,7 @@ module isp_chain_top #(
     input  wire [DW-1:0]   ob_01,
     input  wire [DW-1:0]   ob_10,
     input  wire [DW-1:0]   ob_11,
-    // ---- 配置：AWB 增益（Q2.8，1.0=256；占位期全 256）----
+    // ---- 配置：AWB 写口（inactive；Q2.8，1.0=256；每帧首像素拍采样生效）----
     input  wire [AWB_GW-1:0] awb_gain_00,
     input  wire [AWB_GW-1:0] awb_gain_01,
     input  wire [AWB_GW-1:0] awb_gain_10,
@@ -87,11 +88,13 @@ module isp_chain_top #(
     input  wire            bp_sharpen,
     // ---- 配置：锐化强度 ----
     input  wire [KW-1:0]   sharpen_k,
-    // ---- AWB 统计（预留：M6 用；现恒 0）----
+    // ---- AWB 统计快照组（软核/从机读；fc≥2 起有效，stat 对应帧 fc-1）----
     output wire [31:0]     awb_stat_00,
     output wire [31:0]     awb_stat_01,
     output wire [31:0]     awb_stat_10,
     output wire [31:0]     awb_stat_11,
+    output wire [31:0]     awb_frame_cnt,   // 快照组帧号（与 stat 同拍原子更新）
+    output wire            awb_irq,         // 帧边界 1 拍脉冲
     // ---- AXIS 出（VDMA S2MM，RGB888）----
     output wire [3*OW-1:0] m_axis_tdata,
     output wire [3-1:0]    m_axis_tkeep,    // OW=8 ⇒ 3 字节 ⇒ 恒 3'b111
@@ -142,17 +145,20 @@ module isp_chain_top #(
         .out_sof(s2_sof), .out_eol(s2_eol), .out_phase(s2_ph)
     );
 
-    // ======== 级 3：AWB 增益占位（Bayer 域，LAT=1；gain=1.0 时恒等）========
+    // ======== 级 3：AWB（M6 真实现：统计旁挂 0 拍 + 增益 1 拍；gain=1.0 时恒等）========
     wire          s3_v, s3_rdy, s3_sof, s3_eol;
     wire [DW-1:0] s3_d;
-    awb_stub #(.DW(DW), .GW(AWB_GW), .GF(AWB_GF)) u_awb (
+    awb_top #(.DW(DW), .GW(AWB_GW), .GF(AWB_GF)) u_awb (
         .clk(aclk), .rst_n(aresetn),
         .gain_00(awb_gain_00), .gain_01(awb_gain_01),
         .gain_10(awb_gain_10), .gain_11(awb_gain_11),
         .in_valid(s2_v), .in_ready(s2_rdy), .in_data(s2_d),
         .in_sof(s2_sof), .in_eol(s2_eol), .in_phase(s2_ph),
         .out_valid(s3_v), .out_ready(s3_rdy), .out_data(s3_d),
-        .out_sof(s3_sof), .out_eol(s3_eol)
+        .out_sof(s3_sof), .out_eol(s3_eol),
+        .stat_00(awb_stat_00), .stat_01(awb_stat_01),
+        .stat_10(awb_stat_10), .stat_11(awb_stat_11),
+        .frame_cnt(awb_frame_cnt), .irq(awb_irq)
     );
 
     // ======== 级 4：Demosaic（去马赛克，5×5 行缓存；线性 RGB 保持 10bit）========
@@ -226,13 +232,6 @@ module isp_chain_top #(
         .m_axis_tvalid(m_axis_tvalid), .m_axis_tready(m_axis_tready),
         .m_axis_tlast(m_axis_tlast), .m_axis_tuser(m_axis_tuser)
     );
-
-    // ======== AWB 统计占位（M6 接入点；现恒 0，避免综合出未驱动端口）========
-    assign awb_stat_00 = 32'd0;
-    assign awb_stat_01 = 32'd0;
-    assign awb_stat_10 = 32'd0;
-    assign awb_stat_11 = 32'd0;
-
 endmodule
 
 `endif  // ISP_CHAIN_TOP_V_INC

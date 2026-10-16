@@ -94,7 +94,7 @@ def main():
 
     print('=' * 70)
     print('[1] 逐级独立复算（Python 参考 vs RTL 落盘；下方 "级 N" 即链里第 N 级）')
-    STAGE_NAME = {1: 'BLC', 2: 'DPC', 3: 'AWB(占位)', 4: 'Demosaic',
+    STAGE_NAME = {1: 'BLC', 2: 'DPC', 3: 'AWB', 4: 'Demosaic',
                   5: '降噪', 6: 'CCM', 7: 'Gamma', 8: '锐化'}
     for k in range(1, 9):
         n = len(rtl['s%d' % k])

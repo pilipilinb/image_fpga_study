@@ -2,8 +2,9 @@
 
 > **定位**：把前面 5 个阶段（M1 行缓存 / M2 BLC / M3 DPC+Demosaic / M4 线性 RGB 三模块 / M5.1 锐化+出端）
 > 串成**一条完整的 8 级流水**，两端直接对接实机契约：入端 `AXIS(RAW10)`（承 MIPI CSI-2 RX）、
-> 出端 `AXIS(RGB888, tkeep=111)`（接 VDMA S2MM）。AWB 先放**1 拍 1.0 增益占位**（真实现留 M6），
-> 但顶层已把 AWB 的增益/统计端口按最终形态预留在位。
+> 出端 `AXIS(RGB888, tkeep=111)`（接 VDMA S2MM）。**AWB 已接 M6 真实现**（`../AWB/awb_top.v`：
+> 统计旁挂 + 帧边界增益；原 1 拍占位 stub 退役），数据面零改、新增 `awb_frame_cnt`/`awb_irq` 两输出
+> ——见 [../AWB/M6实施计划.md](../AWB/M6实施计划.md)。
 > 详细设计推导（为什么这么排、时序怎么收敛、stall 怎么量）见 [八级ISP整链设计与验证.md](八级ISP整链设计与验证.md)。
 
 ---
@@ -20,7 +21,7 @@
 ## 链路结构
 
 ```
-AXIS(RAW10) ─[blc_axis_adapter]─ BLC ─ DPC ─[awb_stub 增益占位]─ Demosaic
+AXIS(RAW10) ─[blc_axis_adapter]─ BLC ─ DPC ─[awb_top 真 AWB·M6]─ Demosaic
             ─ 降噪 ─ CCM ─ Gamma ─ 锐化 ─[axis_out_adapter]─ AXIS(RGB888,tkeep=111)
   位宽：   RAW10=10bit ── Bayer 域 ──►  线性 RGB=30bit {R[29:20],G[19:10],B[9:0]}
           ── Gamma 是**全链唯一换位宽的一级** (30→24) ──► RGB888=24bit
@@ -31,12 +32,13 @@ AXIS(RAW10) ─[blc_axis_adapter]─ BLC ─ DPC ─[awb_stub 增益占位]─ D
 
 | 文件 | 作用 |
 |---|---|
-| `isp_chain_top.v` | **整链顶层**：8 级 + 两端 AXIS 适配；端口按最终形态预留 AWB 增益/统计 |
-| `awb_stub.v` | AWB 增益级占位（Bayer 域按相位乘增益，Q2.8，1.0=256 时恒等；延迟 1 拍） |
-| `tb_isp_chain.v` | 自检 TB：AXIS 进/出，协议三场景 + 真图 4 帧，位级比对 + tkeep/tuser/tlast 契约 + 反压稳定 + **stall 测量** |
+| `isp_chain_top.v` | **整链顶层**：8 级 + 两端 AXIS 适配；AWB = M6 真实现（写口 + 统计快照组 + frame_cnt/irq，数据面零改） |
+| `../AWB/awb_top.v` | **M6 AWB 真实现**（stat 旁挂 0 拍 + gain 1 拍 ⇒ 总延迟不变）；原 `awb_stub.v` 保留作历史参照、已不再例化 |
+| `tb_isp_chain.v` | 自检 TB：AXIS 进/出，协议三场景 + 真图 4 帧，位级比对 + 契约 + 反压稳定 + **stall 测量**（AWB 真增益实验见 ../AWB/） |
 | `make_chain_data.py` | 数据/golden：系数表（4 个 `.coe`）+ small 输入 + 真图传感级 RAW（OB+噪声+坏点）+ 理想靶子 |
 | `verify_isp_chain.py` | 独立第二判据：**逐级**重算比对 + 逐级 PSNR + 端到端 PSNR + 基线对照 + 6 格对比图 |
-| `isp_chain_compare.png` | 输入 Bayer / 理想 Bayer / Demosaic 出 / 末端出 / 理想末端 / 放大差异 |
+| `isp_chain_compare.png` | 整链 6 格图（AWB 闭环 6 格图在 `../AWB/awb_chain_compare.png`） |
+| AWB 真增益整链实验（`../AWB/`） | **数据/TB/校验全在 AWB/**：`make_awb_chain_data.py` + `tb_awb_chain.v` + `verify_awb_chain.py`——链工程只保留集成（`isp_chain_top` 换 `awb_top`）与自己的回归 |
 | 生成物 `.hex` | `chain_in_{small,img}.hex` · `exp_{small,img}.hex` · `ideal_in_img.hex` |
 | `range_lut.coe`/`inv_rom.coe`/`ccm_coef.coe`/`gamma_lut.coe` | 由 `make_chain_data.py` 与各模块同源生成（`$readmemh` 走运行目录，必须在本目录） |
 
@@ -53,10 +55,11 @@ module isp_chain_top #(
     input  wire [11:0] s_axis_tdata, input wire s_axis_tvalid, output wire s_axis_tready,
     input  wire s_axis_tlast, input wire s_axis_tuser,
     input  wire [DW-1:0] ob_00, ob_01, ob_10, ob_11,          // 四通道黑电平 R/Gr/Gb/B
-    input  wire [AWB_GW-1:0] awb_gain_00..awb_gain_11,        // AWB 增益（Q2.8，1.0=256）
+    input  wire [AWB_GW-1:0] awb_gain_00..awb_gain_11,        // AWB 写口（Q2.8，1.0=256；帧首拍采样生效）
     input  wire bp_denoise, bp_ccm, bp_gamma, bp_sharpen,     // 四段 bypass
     input  wire [KW-1:0] sharpen_k,
-    output wire [31:0] awb_stat_00..awb_stat_11,              // AWB 统计（预留，现恒 0）
+    output wire [31:0] awb_stat_00..awb_stat_11,              // AWB 统计快照组（fc≥2 起有效）
+    output wire [31:0] awb_frame_cnt, output wire awb_irq,    // 快照组帧号 + 帧边界脉冲
     output wire [23:0] m_axis_tdata, output wire [2:0] m_axis_tkeep,
     output wire m_axis_tvalid, input wire m_axis_tready,
     output wire m_axis_tlast, output wire m_axis_tuser
@@ -65,7 +68,7 @@ module isp_chain_top #(
 
 - **入端**：1 pixel/clock，`tdata[11:0]` 低 10bit=像素；`tuser`=帧首、`tlast`=行末
 - **出端 S2MM 契约**：`tkeep ≡ 3'b111`、`tuser`=帧首、`tlast`=行末、每帧 H×W 像素
-- **AWB 端口按最终形态预留**：增益 4 路 + 统计 4 路（M6 接真 AWB 时顶层不用再改）
+- **AWB = M6 真实现（已接入）**：写口 4 路（帧首拍采样生效）+ 统计快照组 4 路 + `awb_frame_cnt`/`awb_irq`；数据面零改、延迟仍 1 拍（恒等回归全 PASS）；软核闭环"统计帧 N → 帧 N+2 起生效"已位级验证。详见 [../AWB/M6实施计划.md](../AWB/M6实施计划.md)
 
 ## 验证结果（全部 [PASS]）
 
@@ -74,6 +77,7 @@ module isp_chain_top #(
 | 协议 TB（16×12×6 帧，A 满速 / B 汇随机 50% / C 汇长拉低 40~240 拍） | **[PASS]** 入 1152 / 出 1152，位级 0 误差 + tkeep/tuser/tlast 契约全对 + 反压稳定零违例 |
 | 真图 TB（112×103 连发 4 帧） | **[PASS]** 入 46144 / 出 46144，位级 0 误差 |
 | 独立第二判据（`verify_isp_chain.py`） | **逐级 8 级全 0 误差**（img 各级 11536/11536；small 1152/1152） |
+| **AWB 闭环（实验在 `../AWB/`，tb_awb_chain）** | **[PASS]** 4 帧位级 0 误差（帧0/1=1.0、帧2/3=收敛增益）+ 独立复算 0 误差；**端到端 PSNR 15.73 → 34.28 dB（+18.55）**；通道均值 R/B 100/202 → 160/166（靶子 162/169）；图 `../AWB/awb_chain_compare.png` |
 
 ### 逐级插桩：每级 vs「理想输入的同级输出」PSNR（真图，10bit→8bit 口径）
 
@@ -131,13 +135,14 @@ module isp_chain_top #(
 ```powershell
 python make_chain_data.py                       # 系数表 + small 输入/golden
 python make_chain_data.py --img                 # 真图传感级 RAW + golden + 理想靶子
-# ★ -I 必须把 8 个源目录全指到（跨模块 include 链）
-$inc = "-I . -I ..\BLC -I ..\Bayer_DPC_Demosaic -I ..\BilateralFilter -I ..\CCM -I ..\Gamma -I ..\Sharpen -I ..\AxisOut -I ..\line_buffer\line_buffer_fifo_nxn -I ..\fifo"
+# ★ -I 必须把 9 个源目录全指到（跨模块 include 链；链里已接 M6 AWB → 必须含 ..\AWB）
+$inc = "-I . -I ..\AWB -I ..\BLC -I ..\Bayer_DPC_Demosaic -I ..\BilateralFilter -I ..\CCM -I ..\Gamma -I ..\Sharpen -I ..\AxisOut -I ..\line_buffer\line_buffer_fifo_nxn -I ..\fifo"
 iverilog -o tb_isp.vvp     -DNOVCD        $inc.Split(' ') tb_isp_chain.v
 iverilog -o tb_isp_img.vvp -DIMG          $inc.Split(' ') tb_isp_chain.v
 python ..\CCM\_run_wd.py vvp tb_isp.vvp         # ★ 一律在看门狗下跑
 python ..\CCM\_run_wd.py vvp tb_isp_img.vvp
 python verify_isp_chain.py                      # 逐级比对 + 逐级 PSNR + isp_chain_compare.png
+# （AWB 真增益整链实验——数据/TB/校验——全在 ..\AWB\，见 ../AWB/README.md）
 # 整链时序预检（非沙箱；顶层已加进 synth_ooc_timing.tcl 的 tops 列表）
 cd ..\synth_rpt; vivado -mode batch -source ../synth_ooc_timing.tcl -log synth_ooc_timing.log
 ```

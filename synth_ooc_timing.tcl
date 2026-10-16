@@ -32,6 +32,7 @@ set fifo_dir [file join $root fifo]
 set lb_dir   [file join $root line_buffer line_buffer_fifo_nxn]
 
 set incs [list $root $fifo_dir $lb_dir \
+               [file join $root AWB] \
                [file join $root Sharpen] \
                [file join $root BilateralFilter] \
                [file join $root CCM] \
@@ -58,7 +59,9 @@ set srcs [list \
     [file join $root Bayer_DPC_Demosaic demosaic_mhc_dw.v] \
     [file join $root Bayer_DPC_Demosaic demosaic_stage.v] \
     [file join $root AxisOut axis_out_adapter.v] \
-    [file join $root FpgaIspChain awb_stub.v] \
+    [file join $root AWB awb_stat.v] \
+    [file join $root AWB awb_gain.v] \
+    [file join $root AWB awb_top.v] \
     [file join $root FpgaIspChain isp_chain_top.v] \
     [file join $fifo_dir axis_stream_fifo.v] \
     [file join $fifo_dir async_fifo.v] \

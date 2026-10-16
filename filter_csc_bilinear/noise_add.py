@@ -93,10 +93,6 @@ def main():
     ap.add_argument('--out-hex', default='noise.hex', help='噪声图 hex 输出（默认 noise.hex；椒盐建议 salt_pepper.hex）')
     ap.add_argument('--sigma', type=int, default=20, help='高斯噪声标准差（默认 20）')
     ap.add_argument('--salt', type=float, default=0.0, help='椒盐噪声概率（>0 启用椒盐模式，如 0.10 = 10% 像素变 0/255）')
-    ap.add_argument('--mix', nargs=2, type=float, default=None, metavar=('SIGMA', 'P'),
-                    help='混合噪声（链路用）：先高斯后椒盐，如 --mix 20 0.10')
-    ap.add_argument('--seed', type=int, default=20260819,
-                    help='随机种子（审查修正：无 seed 则噪底不可复现，文档数据失效；默认固定）')
     ap.add_argument('--w', type=int, default=112, help='图像宽')
     ap.add_argument('--h', type=int, default=103, help='图像高')
     ap.add_argument('--compare', action='store_true', help='对比模式：拼 原图|噪声|滤波后 图 + PSNR')
@@ -166,17 +162,11 @@ def main():
         print(f'对比图已保存: {args.png}（左=原图 | 中=噪声图 | 右=滤波后）')
         print('========================================')
     else:
-        # ---- 噪声生成模式：原图 hex → 高斯或椒盐或混合噪声 hex + 预览图 ----
-        random.seed(args.seed)   # 固定种子：噪底可复现（审查修正）
+        # ---- 噪声生成模式：原图 hex → 高斯或椒盐噪声 hex + 预览图 ----
         orig = load_hex(args.in_hex)
         if len(orig) != args.w * args.h:
             raise SystemExit(f'错误: 原图 {len(orig)} 像素，期望 {args.w}x{args.h}')
-        if args.mix is not None:
-            # 混合噪声（链路用）：先高斯后椒盐（椒盐最后覆盖，生成确定性）
-            noisy = add_gaussian(orig, int(args.mix[0]))
-            noisy = add_salt_pepper(noisy, args.mix[1])
-            tag = f'混合噪声 高斯σ={args.mix[0]:g} + 椒盐p={args.mix[1]:.2f}'
-        elif args.salt > 0:
+        if args.salt > 0:
             noisy = add_salt_pepper(orig, args.salt)
             tag = f'椒盐噪声 p={args.salt:.2f}'
         else:

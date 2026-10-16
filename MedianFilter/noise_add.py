@@ -52,21 +52,6 @@ def add_gaussian(px, sigma):
     return out
 
 
-def add_salt_pepper(px, prob):
-    """椒盐噪声：每个像素以概率 prob 变极端值（三通道同时变，
-    一半概率置 255 白点/盐，一半概率置 0 黑点/椒）
-    中值滤波的专属靶子——极值像素在 3×3 窗口内少于 5 个时，
-    中值输出必为真实像素，直接剔除脉冲"""
-    out = []
-    for p in px:
-        if random.random() < prob:
-            v = 0xFFFFFF if random.random() < 0.5 else 0x000000
-            out.append(v)
-        else:
-            out.append(p)
-    return out
-
-
 def pix_diff(a, b):
     """两像素 24bit 的三通道平方误差和"""
     return ((a >> 16 & 0xFF) - (b >> 16 & 0xFF)) ** 2 + \
@@ -88,17 +73,16 @@ def preview(px, path, w, h):
 
 
 def main():
-    ap = argparse.ArgumentParser(description='噪声（高斯/椒盐）+ 滤波前后对比（复用于均值/高斯/中值工程）')
+    ap = argparse.ArgumentParser(description='高斯噪声 + 高斯滤波前后对比')
     ap.add_argument('--in-hex', default='input.hex', help='原图 hex（默认 input.hex）')
-    ap.add_argument('--out-hex', default='noise.hex', help='噪声图 hex 输出（默认 noise.hex；椒盐建议 salt_pepper.hex）')
+    ap.add_argument('--out-hex', default='noise.hex', help='噪声图 hex 输出（默认 noise.hex）')
     ap.add_argument('--sigma', type=int, default=20, help='高斯噪声标准差（默认 20）')
-    ap.add_argument('--salt', type=float, default=0.0, help='椒盐噪声概率（>0 启用椒盐模式，如 0.10 = 10% 像素变 0/255）')
     ap.add_argument('--w', type=int, default=112, help='图像宽')
     ap.add_argument('--h', type=int, default=103, help='图像高')
     ap.add_argument('--compare', action='store_true', help='对比模式：拼 原图|噪声|滤波后 图 + PSNR')
     ap.add_argument('--full', action='store_true', help='滤波输出为全尺寸（pad 版，H×W，直接逐像素比）')
     ap.add_argument('--out-coe', default='output.coe', help='仿真输出 COE（对比模式用）')
-    ap.add_argument('--png', default='median_filter_compare.png', help='对比图输出路径')
+    ap.add_argument('--png', default='gaussian_filter_compare.png', help='对比图输出路径')
     args = ap.parse_args()
 
     if args.compare:
@@ -154,31 +138,25 @@ def main():
         canvas.save(args.png)
 
         mode = 'pad 全尺寸' if args.full else 'crop（中心对齐）'
-        noise_tag = f'椒盐 p={args.salt:.2f}' if args.salt > 0 else f'高斯 σ={args.sigma}'
         print('========================================')
-        print(f'[{mode}] 噪声图 vs 原图 : PSNR = {psnr_noise:.2f} dB（噪声水平，{noise_tag}）')
+        print(f'[{mode}] 噪声图 vs 原图 : PSNR = {psnr_noise:.2f} dB（噪声水平，sigma={args.sigma}）')
         print(f'[{mode}] 滤波后 vs 原图 : PSNR = {psnr_filt:.2f} dB（去噪恢复度）')
         print(f'PSNR 提升: {psnr_filt - psnr_noise:+.2f} dB')
         print(f'对比图已保存: {args.png}（左=原图 | 中=噪声图 | 右=滤波后）')
         print('========================================')
     else:
-        # ---- 噪声生成模式：原图 hex → 高斯或椒盐噪声 hex + 预览图 ----
+        # ---- 噪声生成模式：原图 hex → 噪声 hex + 预览图 ----
         orig = load_hex(args.in_hex)
         if len(orig) != args.w * args.h:
             raise SystemExit(f'错误: 原图 {len(orig)} 像素，期望 {args.w}x{args.h}')
-        if args.salt > 0:
-            noisy = add_salt_pepper(orig, args.salt)
-            tag = f'椒盐噪声 p={args.salt:.2f}'
-        else:
-            noisy = add_gaussian(orig, args.sigma)
-            tag = f'高斯噪声 sigma={args.sigma}'
+        noisy = add_gaussian(orig, args.sigma)
         save_hex(noisy, args.out_hex)
         preview(noisy, 'noise_preview.png', args.w, args.h)
         psnr_noise = psnr(orig, noisy)
-        print(f'OK: {args.in_hex} → {args.out_hex}（{tag}）')
+        print(f'OK: {args.in_hex} → {args.out_hex}（高斯噪声 sigma={args.sigma}）')
         print(f'噪声图 vs 原图 PSNR = {psnr_noise:.2f} dB')
         print(f'预览图已保存: noise_preview.png')
-        print('下一步: iverilog -DNOISE -I . -o tb.vvp tb_median_filter.v → vvp → python noise_add.py --compare')
+        print('下一步: iverilog -DNOISE -I . -o tb.vvp tb_gaussian_filter.v → vvp → python noise_add.py --compare')
 
 
 if __name__ == '__main__':

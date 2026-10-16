@@ -17,7 +17,8 @@
 //========================================================================
 `timescale 1ns/1ps
 
-// (本副本的 include 已移除：底层文件由 top_chain.v 统一 `include，避免重复声明)
+`include "line_buffer_3x3.v"
+`include "gaussian_3x3_8b.v"
 
 module top_gaussian_filter #(
     parameter IMG_W = 112,     // 图像宽
